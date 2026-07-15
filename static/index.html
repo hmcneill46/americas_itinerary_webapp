@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#16324f">
+  <title>Americas Itinerary</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <div>
+          <h1 id="app-title">Americas Itinerary</h1>
+          <p id="app-subtitle">Loading the itinerary…</p>
+        </div>
+      </div>
+      <nav class="primary-tabs" aria-label="Main views">
+        <button class="tab-button active" data-tab="day">Day bars</button>
+        <button class="tab-button" data-tab="map">Map</button>
+        <button class="tab-button" data-tab="edit">Edit</button>
+      </nav>
+      <div class="top-status">
+        <span id="save-status" class="status-pill">Loading</span>
+        <button id="reload-button" class="icon-button" title="Reload the saved itinerary" aria-label="Reload">↻</button>
+      </div>
+    </header>
+
+    <main class="main-area">
+      <section id="view-day" class="view-panel active" aria-label="Day timeline view">
+        <div class="view-toolbar day-toolbar">
+          <div class="toolbar-group">
+            <button id="day-prev" class="step-button" title="Previous day">←</button>
+            <label class="field-inline">Jump to <input id="day-date" type="date"></label>
+            <button id="day-next" class="step-button" title="Next day">→</button>
+            <button id="today-start-button" class="secondary-button">Trip start</button>
+          </div>
+          <div class="toolbar-group grow">
+            <label class="field-inline grow">Search <input id="day-search" type="search" placeholder="Activity, location or note"></label>
+            <select id="category-filter" class="compact-select" aria-label="Filter category">
+              <option value="">All categories</option>
+            </select>
+            <label class="switch-label"><input id="compact-days" type="checkbox"> Compact</label>
+          </div>
+        </div>
+
+        <div class="day-layout">
+          <div class="timeline-pane">
+            <div class="timeline-scale sticky-scale">
+              <div class="scale-meta">Date and base</div>
+              <div class="scale-bar">
+                <span style="left:0%">00:00</span>
+                <span style="left:25%">06:00</span>
+                <span style="left:50%">12:00</span>
+                <span style="left:75%">18:00</span>
+                <span style="left:100%">24:00</span>
+              </div>
+            </div>
+            <div id="day-list" class="day-list"></div>
+          </div>
+
+          <aside id="event-details" class="details-panel">
+            <div class="empty-details">
+              <div class="empty-icon">↗</div>
+              <h2>Select part of a bar</h2>
+              <p>Click any event segment to highlight every part of that event, including pieces on other days.</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="view-map" class="view-panel" aria-label="Map view">
+        <div class="map-toolbar view-toolbar">
+          <div class="map-day-control">
+            <button id="map-prev" class="step-button" title="Previous day">←</button>
+            <input id="map-slider" type="range" min="1" value="1">
+            <button id="map-next" class="step-button" title="Next day">→</button>
+          </div>
+          <div class="toolbar-group">
+            <strong id="map-slider-label">Day 1</strong>
+            <button id="map-play" class="secondary-button">▶ Play</button>
+            <button id="map-fit" class="secondary-button">Fit route</button>
+            <button id="map-reset" class="secondary-button">Reset map</button>
+          </div>
+        </div>
+        <div class="map-layout">
+          <div id="map-wrap" class="map-wrap">
+            <svg id="route-map" viewBox="0 0 1100 850" aria-label="Interactive route map">
+              <g id="map-viewport">
+                <rect x="0" y="0" width="1100" height="850" class="map-sea"></rect>
+                <g id="map-countries"></g>
+                <g id="map-legs"></g>
+                <g id="map-nodes"></g>
+              </g>
+            </svg>
+            <div id="map-tooltip" class="map-tooltip"></div>
+            <div id="map-legend" class="map-legend"></div>
+          </div>
+          <aside class="map-side-panel">
+            <div id="map-day-card" class="map-day-card"></div>
+            <div id="map-route-list" class="map-route-list"></div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="view-edit" class="view-panel" aria-label="Edit view">
+        <div class="edit-toolbar view-toolbar">
+          <div class="toolbar-group">
+            <button id="save-button" class="primary-button" disabled>Save to itinerary file</button>
+            <button id="cancel-button" class="secondary-button" disabled>Cancel all changes</button>
+            <button id="validate-button" class="secondary-button">Validate draft</button>
+          </div>
+          <div class="toolbar-group">
+            <a id="download-saved-button" class="secondary-button link-button" href="/api/download" download="itinerary.json">Download saved JSON</a>
+            <button id="download-button" class="secondary-button">Download draft JSON</button>
+            <label class="upload-button secondary-button">Upload JSON<input id="upload-input" type="file" accept="application/json,.json"></label>
+            <label id="token-label" class="field-inline token-field hidden">Edit token <input id="edit-token" type="password" autocomplete="off"></label>
+          </div>
+        </div>
+
+        <div class="edit-status-row">
+          <span id="draft-status" class="draft-status">No unsaved changes</span>
+          <span id="validation-status" class="validation-status"></span>
+        </div>
+
+        <div class="edit-subtabs" role="tablist">
+          <button class="edit-subtab active" data-edit-tab="events">Events</button>
+          <button class="edit-subtab" data-edit-tab="route">Route and days</button>
+          <button class="edit-subtab" data-edit-tab="locations">Locations</button>
+        </div>
+
+        <div id="edit-events" class="edit-section active">
+          <div class="editor-grid">
+            <aside class="editor-list-panel">
+              <div class="editor-list-toolbar">
+                <input id="event-search" type="search" placeholder="Search events">
+                <button id="add-event" class="primary-button small">+ Event</button>
+              </div>
+              <div id="event-list" class="editor-list"></div>
+            </aside>
+            <section class="editor-form-panel">
+              <div id="event-form-empty" class="editor-empty">
+                <h2>Select or add an event</h2>
+                <p>Changes here remain in a private draft until the main Save button is pressed.</p>
+              </div>
+              <form id="event-form" class="form-grid hidden" autocomplete="off">
+                <input id="event-id" type="hidden">
+                <label class="span-2">Title<input id="event-title" required></label>
+                <label>Category<select id="event-category"></select></label>
+                <label>Confidence<select id="event-confidence"><option>High</option><option>Medium</option><option>Low</option></select></label>
+                <label>Start<input id="event-start" type="datetime-local" step="60" required></label>
+                <label>End<input id="event-end" type="datetime-local" step="60" required></label>
+                <label>Visit<select id="event-visit"></select></label>
+                <label>Location<select id="event-location"></select></label>
+                <label>From<select id="event-from"></select></label>
+                <label>To<select id="event-to"></select></label>
+                <label>Travel mode<select id="event-mode"></select></label>
+                <label class="checkbox-field"><input id="event-locked" type="checkbox"> Mark as locked/confirmed</label>
+                <label class="span-2">Notes<textarea id="event-notes" rows="5"></textarea></label>
+                <div class="form-actions span-2">
+                  <button type="submit" class="primary-button">Apply to draft</button>
+                  <button id="duplicate-event" type="button" class="secondary-button">Duplicate</button>
+                  <button id="delete-event" type="button" class="danger-button">Delete</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </div>
+
+        <div id="edit-route" class="edit-section">
+          <div class="route-editor-layout">
+            <aside class="route-editor-list-panel">
+              <div class="section-heading">
+                <div><h2>Route blocks</h2><p>Move a complete stop with its days and events, then reflow dates.</p></div>
+                <button id="reflow-route" class="primary-button small">Reflow dates</button>
+              </div>
+              <div id="route-editor-list" class="route-editor-list"></div>
+            </aside>
+            <section class="route-editor-detail">
+              <div id="visit-editor" class="card editor-card"></div>
+              <div class="card editor-card">
+                <div class="section-heading"><div><h2>Daily information</h2><p>This preserves the summary, notes and confidence formerly shown in the spreadsheet.</p></div></div>
+                <div class="day-edit-picker">
+                  <button id="edit-day-prev" class="step-button">←</button>
+                  <input id="edit-day-date" type="date">
+                  <button id="edit-day-next" class="step-button">→</button>
+                </div>
+                <form id="day-form" class="form-grid" autocomplete="off">
+                  <label>Base<input id="day-base"></label>
+                  <label>Country<input id="day-country"></label>
+                  <label>Confidence<select id="day-confidence"><option>High</option><option>Medium</option><option>Low</option></select></label>
+                  <label class="checkbox-field"><input id="day-physical" type="checkbox"> Physical location day</label>
+                  <label class="span-2">Summary<textarea id="day-summary" rows="3"></textarea></label>
+                  <label class="span-2">Notes<textarea id="day-notes" rows="5"></textarea></label>
+                  <div class="form-actions span-2"><button type="submit" class="primary-button">Apply day changes</button></div>
+                </form>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div id="edit-locations" class="edit-section">
+          <div class="editor-grid">
+            <aside class="editor-list-panel">
+              <div class="editor-list-toolbar">
+                <input id="location-search" type="search" placeholder="Search locations">
+                <button id="add-location" class="primary-button small">+ Location</button>
+              </div>
+              <div id="location-list" class="editor-list"></div>
+            </aside>
+            <section class="editor-form-panel">
+              <div id="location-form-empty" class="editor-empty"><h2>Select or add a location</h2></div>
+              <form id="location-form" class="form-grid hidden" autocomplete="off">
+                <label>ID<input id="location-id" required></label>
+                <label>Name<input id="location-name" required></label>
+                <label>Country<input id="location-country" required></label>
+                <label>Timezone<input id="location-timezone" placeholder="America/Lima"></label>
+                <label>Latitude<input id="location-latitude" type="number" step="0.0001" min="-90" max="90" required></label>
+                <label>Longitude<input id="location-longitude" type="number" step="0.0001" min="-180" max="180" required></label>
+                <label class="span-2">Notes<textarea id="location-notes" rows="5"></textarea></label>
+                <div class="form-actions span-2">
+                  <button type="submit" class="primary-button">Apply to draft</button>
+                  <button id="delete-location" type="button" class="danger-button">Delete</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+  <dialog id="validation-dialog" class="validation-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><h2>Validation results</h2><button value="close" class="icon-button">×</button></div>
+      <div id="validation-dialog-content"></div>
+      <div class="dialog-actions"><button value="close" class="primary-button">Close</button></div>
+    </form>
+  </dialog>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

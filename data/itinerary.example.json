@@ -1,0 +1,218 @@
+{
+  "schema_version": 4,
+  "metadata": {
+    "title": "Example Trip Itinerary",
+    "description": "Small public-safe sample itinerary for local development.",
+    "start_date": "2027-01-01",
+    "end_date": "2027-01-03",
+    "home_location_id": "home",
+    "time_model": "floating_local",
+    "time_model_note": "Event timestamps are local itinerary clock times without UTC offsets.",
+    "category_colours": {
+      "Sleep": "#294C60",
+      "Meal": "#F4D6A0",
+      "Activity": "#7FB77E",
+      "Hike": "#4FA3A5",
+      "Travel": "#E58C47",
+      "Rest": "#C9CED6",
+      "Admin": "#E8C547",
+      "Evening": "#A98CC2",
+      "Tour": "#5D9CEC"
+    },
+    "map_bounds": {
+      "min_lon": -10,
+      "max_lon": 5,
+      "min_lat": 45,
+      "max_lat": 60
+    },
+    "created_from": "data/itinerary.example.json"
+  },
+  "locations": {
+    "home": {
+      "id": "home",
+      "name": "Home",
+      "country": "Exampleland",
+      "latitude": 51.5,
+      "longitude": -0.12,
+      "timezone": "Europe/London",
+      "notes": ""
+    },
+    "sample_city": {
+      "id": "sample_city",
+      "name": "Sample City",
+      "country": "Exampleland",
+      "latitude": 48.85,
+      "longitude": 2.35,
+      "timezone": "Europe/Paris",
+      "notes": ""
+    }
+  },
+  "visits": [
+    {
+      "id": "home__01",
+      "order": 1,
+      "location_id": "home",
+      "start_date": "2027-01-01",
+      "end_date": "2027-01-01",
+      "stay_start_date": "2027-01-01",
+      "stay_end_date": "2027-01-01",
+      "arrival_mode": "",
+      "arrival_hours_estimate": 0,
+      "arrival_summary": "Start at home",
+      "notes": ""
+    },
+    {
+      "id": "sample_city__01",
+      "order": 2,
+      "location_id": "sample_city",
+      "start_date": "2027-01-02",
+      "end_date": "2027-01-03",
+      "stay_start_date": "2027-01-02",
+      "stay_end_date": "2027-01-03",
+      "arrival_mode": "Train",
+      "arrival_hours_estimate": 3,
+      "arrival_summary": "Travel to Sample City",
+      "notes": ""
+    }
+  ],
+  "days": [
+    {
+      "date": "2027-01-01",
+      "day_number": 1,
+      "visit_id": "home__01",
+      "location_id": "home",
+      "country": "Exampleland",
+      "base": "Home",
+      "summary": "Pack and prepare for the sample trip.",
+      "confidence": "High",
+      "notes": ""
+    },
+    {
+      "date": "2027-01-02",
+      "day_number": 2,
+      "visit_id": "sample_city__01",
+      "location_id": "sample_city",
+      "country": "Exampleland",
+      "base": "Sample City",
+      "summary": "Travel to Sample City and take an evening walk.",
+      "confidence": "Medium",
+      "notes": ""
+    },
+    {
+      "date": "2027-01-03",
+      "day_number": 3,
+      "visit_id": "sample_city__01",
+      "location_id": "sample_city",
+      "country": "Exampleland",
+      "base": "Sample City",
+      "summary": "Explore a sample museum and park.",
+      "confidence": "Medium",
+      "notes": ""
+    }
+  ],
+  "events": [
+    {
+      "id": "evt_example_sleep",
+      "title": "Sleep",
+      "category": "Sleep",
+      "start": "2027-01-01T00:00",
+      "end": "2027-01-01T08:00",
+      "visit_id": "home__01",
+      "location_id": "home",
+      "from_location_id": "",
+      "to_location_id": "",
+      "transport_mode": "",
+      "confidence": "High",
+      "notes": "",
+      "day_summaries": [
+        "Pack and prepare for the sample trip."
+      ],
+      "source_dates": [
+        "2027-01-01"
+      ],
+      "locked": false
+    },
+    {
+      "id": "evt_example_train",
+      "title": "Train to Sample City",
+      "category": "Travel",
+      "start": "2027-01-02T09:00",
+      "end": "2027-01-02T12:00",
+      "visit_id": "sample_city__01",
+      "location_id": "sample_city",
+      "from_location_id": "home",
+      "to_location_id": "sample_city",
+      "transport_mode": "Train",
+      "confidence": "Medium",
+      "notes": "",
+      "day_summaries": [
+        "Travel to Sample City and take an evening walk."
+      ],
+      "source_dates": [
+        "2027-01-02"
+      ],
+      "locked": false
+    },
+    {
+      "id": "evt_example_walk",
+      "title": "Evening walk",
+      "category": "Activity",
+      "start": "2027-01-02T18:00",
+      "end": "2027-01-02T20:00",
+      "visit_id": "sample_city__01",
+      "location_id": "sample_city",
+      "from_location_id": "",
+      "to_location_id": "",
+      "transport_mode": "",
+      "confidence": "Medium",
+      "notes": "",
+      "day_summaries": [
+        "Travel to Sample City and take an evening walk."
+      ],
+      "source_dates": [
+        "2027-01-02"
+      ],
+      "locked": false
+    },
+    {
+      "id": "evt_example_museum",
+      "title": "Sample museum",
+      "category": "Tour",
+      "start": "2027-01-03T10:00",
+      "end": "2027-01-03T12:00",
+      "visit_id": "sample_city__01",
+      "location_id": "sample_city",
+      "from_location_id": "",
+      "to_location_id": "",
+      "transport_mode": "",
+      "confidence": "Medium",
+      "notes": "",
+      "day_summaries": [
+        "Explore a sample museum and park."
+      ],
+      "source_dates": [
+        "2027-01-03"
+      ],
+      "locked": false
+    }
+  ],
+  "bookings": [
+    [
+      {
+        "__date__": "2027-01-02"
+      },
+      "Train",
+      "Home to Sample City",
+      "Morning",
+      "About 3h",
+      {
+        "__date__": "2026-12-01"
+      },
+      null,
+      "Example only",
+      "Low",
+      "Replace this with your own private booking notes in data/itinerary.json.",
+      ""
+    ]
+  ]
+}

@@ -1,0 +1,21 @@
+[Unit]
+Description=Americas itinerary web app
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/americas_itinerary_webapp
+Environment=ITINERARY_HOST=0.0.0.0
+Environment=ITINERARY_PORT=8765
+# Optional: Environment=ITINERARY_EDIT_TOKEN=replace-with-a-long-secret
+ExecStart=/home/pi/americas_itinerary_webapp/.venv/bin/python /home/pi/americas_itinerary_webapp/app.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
