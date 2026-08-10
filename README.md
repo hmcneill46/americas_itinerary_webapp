@@ -42,7 +42,7 @@ python tools/validate_itinerary.py data/itinerary.example.json
 
 ## JSON portability and time model
 
-The documented current format is schema v5: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable IDs, named booking objects, typed fields and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
+The documented current format is schema v6: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable IDs, named booking objects, first-class budget items, typed fields and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
 
 Events use floating local wall-clock timestamps. `2027-04-09T08:30` means 08:30 at that point in the trip; it has no `Z` or UTC offset and is not converted through the browser timezone. Events can last exact minutes or span several days.
 
@@ -52,6 +52,7 @@ Download/upload supports an AI-assisted workflow: download JSON, edit it with a 
 
 - **Day bars** render exact-minute event segments, overlaps, multi-day clipping, search and category filters.
 - **Map** uses a locally served, pinned MapLibre GL JS runtime with an OpenFreeMap Positron vector basemap. It shows ordered visit markers, repeated visits, secondary event locations and tappable dashed route connections. Map selections can open the relevant day or event, while explicit focus actions leave ordinary manual exploration alone.
+- **Budget** keeps exact-decimal native-currency cost items, stored FX snapshots, expected/committed/paid totals, deposits/refunds, category and visit breakdowns, plus a responsive cost editor and quick-expense flow. No live currency service is used; an item without an FX snapshot is visibly excluded from complete base-currency totals.
 - **Edit** supports events, locations, visit duration/order, day information and route date reflow.
 
 Route reflow shifts a complete visit, its days and its events while retaining floating-local times.
@@ -102,7 +103,7 @@ The application shell and pinned MapLibre library are served by this app. The de
 
 ```text
 app.py                         FastAPI API, revisions, atomic saves and backups
-trip_schema.py                 Schema v5 models, validation and migrations
+trip_schema.py                 Schema v6 models, validation and migrations
 static/                        Plain-JavaScript UI, MapLibre integration and pinned map runtime
 data/itinerary.example.json    Canonical public demo data
 data/itinerary.json            Private live itinerary (ignored)

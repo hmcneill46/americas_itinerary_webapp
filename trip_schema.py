@@ -7,13 +7,14 @@ import hashlib
 import json
 import math
 import re
+from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, time, timedelta
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 OLDEST_SUPPORTED_SCHEMA_VERSION = 4
 
 ALLOWED_MODES = {
@@ -33,6 +34,21 @@ ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 COLOUR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 LOCAL_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$")
+MONEY_RE = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
+
+DEFAULT_FINANCIAL_CATEGORIES = (
+    ("accommodation", "Accommodation", "#6C63A8"),
+    ("long_distance_transport", "Long-distance Transport", "#E58C47"),
+    ("local_transport", "Local Transport", "#527284"),
+    ("food_drink", "Food & Drink", "#D58F52"),
+    ("activities_tours", "Activities & Tours", "#7FB77E"),
+    ("treks_expeditions", "Treks / Expeditions", "#498C8A"),
+    ("visas_admin", "Visas & Admin", "#E8C547"),
+    ("insurance", "Insurance", "#607D8B"),
+    ("gear_equipment", "Gear / Equipment", "#8064A2"),
+    ("communications", "Communications", "#4C8DA8"),
+    ("miscellaneous", "Miscellaneous", "#8A7C70"),
+)
 
 
 class MigrationError(ValueError):
@@ -80,6 +96,26 @@ def _identifier(value: str, field_name: str) -> str:
         raise ValueError(
             f"{field_name} must be 1-128 characters using letters, numbers, dot, underscore, colon or hyphen"
         )
+    return value
+
+
+def _currency_code(value: str, field_name: str) -> str:
+    if not re.fullmatch(r"[A-Z]{3}", value):
+        raise ValueError(f"{field_name} must be a three-letter uppercase currency code")
+    return value
+
+
+def _money(value: str, field_name: str, *, allow_negative: bool = True) -> str:
+    if not MONEY_RE.fullmatch(value):
+        raise ValueError(f"{field_name} must be an exact decimal string such as 25.00")
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError(f"{field_name} must be a valid decimal amount") from exc
+    if not parsed.is_finite():
+        raise ValueError(f"{field_name} must be finite")
+    if not allow_negative and parsed < 0:
+        raise ValueError(f"{field_name} must not be negative")
     return value
 
 
@@ -334,6 +370,175 @@ class Booking(SchemaModel):
         return value
 
 
+class FinancialCategory(SchemaModel):
+    id: str
+    name: str
+    colour: str
+
+    @field_validator("id")
+    @classmethod
+    def valid_id(cls, value: str) -> str:
+        return _identifier(value, "financial category id")
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        return _required_text(value, "financial category name")
+
+    @field_validator("colour")
+    @classmethod
+    def valid_colour(cls, value: str) -> str:
+        if not COLOUR_RE.fullmatch(value):
+            raise ValueError("financial category colour must be a six-digit hex value such as #3A7D44")
+        return value
+
+
+class CostExpectation(SchemaModel):
+    """One unit price and a small, explicit quantity basis; never a stored total."""
+
+    unit_amount: str
+    basis: Literal["fixed", "per_day", "per_night", "per_person", "per_unit"] = "fixed"
+    quantity_source: Literal["manual", "visit_days", "visit_nights"] = "manual"
+    quantity: int = Field(default=1, ge=0)
+
+    @field_validator("unit_amount")
+    @classmethod
+    def valid_unit_amount(cls, value: str) -> str:
+        return _money(value, "expected.unit_amount", allow_negative=False)
+
+    @model_validator(mode="after")
+    def valid_basis_quantity(self) -> "CostExpectation":
+        if self.basis == "fixed" and (self.quantity_source != "manual" or self.quantity != 1):
+            raise ValueError("fixed expected costs must use manual quantity 1")
+        if self.quantity_source != "manual" and self.quantity != 0:
+            raise ValueError("derived visit quantities must use quantity 0")
+        if self.basis in {"per_day", "per_night"} and self.quantity_source == "manual" and self.quantity < 1:
+            raise ValueError("manual daily/nightly quantities must be at least 1")
+        if self.basis in {"per_person", "per_unit"} and self.quantity_source != "manual":
+            raise ValueError("per-person and per-unit costs require a manual quantity")
+        if self.basis in {"per_person", "per_unit"} and self.quantity < 1:
+            raise ValueError("manual quantities must be at least 1")
+        return self
+
+
+class FxSnapshot(SchemaModel):
+    """Stored native-to-base rate; blank means the item cannot yet be totalled in base currency."""
+
+    rate_to_base: str = ""
+    as_of_date: str = ""
+    source: str = ""
+    note: str = ""
+
+    @field_validator("rate_to_base")
+    @classmethod
+    def valid_rate(cls, value: str) -> str:
+        if value == "":
+            return value
+        _money(value, "fx.rate_to_base", allow_negative=False)
+        if Decimal(value) <= 0:
+            raise ValueError("fx.rate_to_base must be greater than zero")
+        return value
+
+    @field_validator("as_of_date")
+    @classmethod
+    def valid_as_of_date(cls, value: str) -> str:
+        return _date_string(value, "fx.as_of_date", allow_blank=True)
+
+
+class CostPayment(SchemaModel):
+    id: str
+    kind: Literal["payment", "refund", "adjustment"] = "payment"
+    amount: str
+    date: str = ""
+    note: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def valid_id(cls, value: str) -> str:
+        return _identifier(value, "payment id")
+
+    @field_validator("amount")
+    @classmethod
+    def valid_amount(cls, value: str) -> str:
+        return _money(value, "payment amount")
+
+    @field_validator("date")
+    @classmethod
+    def valid_date(cls, value: str) -> str:
+        return _date_string(value, "payment date", allow_blank=True)
+
+    @model_validator(mode="after")
+    def valid_kind_amount(self) -> "CostPayment":
+        if self.kind in {"payment", "refund"} and Decimal(self.amount) < 0:
+            raise ValueError("payment and refund amounts must not be negative; use adjustment for a signed correction")
+        return self
+
+
+class CostItem(SchemaModel):
+    id: str
+    name: str
+    category_id: str
+    currency: str
+    expected: CostExpectation
+    committed_amount: str = "0"
+    fx: FxSnapshot = Field(default_factory=FxSnapshot)
+    payments: list[CostPayment] = Field(default_factory=list)
+    visit_id: str = ""
+    event_id: str = ""
+    booking_id: str = ""
+    location_id: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    notes: str = ""
+
+    @field_validator("id", "category_id")
+    @classmethod
+    def valid_ids(cls, value: str, info: Any) -> str:
+        return _identifier(value, info.field_name)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        return _required_text(value, "cost item name")
+
+    @field_validator("currency")
+    @classmethod
+    def valid_currency(cls, value: str) -> str:
+        return _currency_code(value, "currency")
+
+    @field_validator("committed_amount")
+    @classmethod
+    def valid_committed(cls, value: str) -> str:
+        return _money(value, "committed_amount", allow_negative=False)
+
+    @field_validator("visit_id", "event_id", "booking_id", "location_id")
+    @classmethod
+    def valid_optional_ids(cls, value: str, info: Any) -> str:
+        return value if value == "" else _identifier(value, info.field_name)
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def valid_optional_dates(cls, value: str, info: Any) -> str:
+        return _date_string(value, info.field_name, allow_blank=True)
+
+
+class Budget(SchemaModel):
+    base_currency: str
+    total_budget: str = "0"
+    categories: list[FinancialCategory]
+    cost_items: list[CostItem] = Field(default_factory=list)
+
+    @field_validator("base_currency")
+    @classmethod
+    def valid_base_currency(cls, value: str) -> str:
+        return _currency_code(value, "budget.base_currency")
+
+    @field_validator("total_budget")
+    @classmethod
+    def valid_total_budget(cls, value: str) -> str:
+        return _money(value, "budget.total_budget", allow_negative=False)
+
+
 class ItineraryV5(SchemaModel):
     schema_version: Literal[5]
     metadata: Metadata
@@ -342,6 +547,17 @@ class ItineraryV5(SchemaModel):
     days: list[Day]
     events: list[Event]
     bookings: list[Booking]
+
+
+class ItineraryV6(SchemaModel):
+    schema_version: Literal[6]
+    metadata: Metadata
+    locations: dict[str, Location]
+    visits: list[Visit]
+    days: list[Day]
+    events: list[Event]
+    bookings: list[Booking]
+    budget: Budget
 
 
 def _format_pydantic_errors(exc: ValidationError) -> list[str]:
@@ -371,7 +587,27 @@ def _duplicate_errors(values: list[str], label: str) -> list[str]:
     return [f"Duplicate {label} ID: {value}." for value in sorted(duplicates)]
 
 
-def _cross_record_errors(model: ItineraryV5) -> list[str]:
+def _cost_quantity(item: CostItem, visit_by_id: dict[str, Visit]) -> Decimal:
+    if item.expected.quantity_source == "manual":
+        return Decimal(item.expected.quantity)
+    visit = visit_by_id[item.visit_id]
+    days = (date.fromisoformat(visit.end_date) - date.fromisoformat(visit.start_date)).days + 1
+    return Decimal(days if item.expected.quantity_source == "visit_days" else max(0, days - 1))
+
+
+def _cost_expected_amount(item: CostItem, visit_by_id: dict[str, Visit]) -> Decimal:
+    return Decimal(item.expected.unit_amount) * _cost_quantity(item, visit_by_id)
+
+
+def _cost_paid_amount(item: CostItem) -> Decimal:
+    total = Decimal("0")
+    for payment in item.payments:
+        amount = Decimal(payment.amount)
+        total += -amount if payment.kind == "refund" else amount
+    return total
+
+
+def _cross_record_errors(model: ItineraryV6) -> list[str]:
     errors: list[str] = []
     metadata = model.metadata
     start_date = _parse_date(metadata.start_date)
@@ -506,11 +742,88 @@ def _cross_record_errors(model: ItineraryV5) -> list[str]:
             if visit and visit.location_id != booking.location_id:
                 errors.append(f"{path}.location_id must match its referenced visit location.")
 
+    budget = model.budget
+    category_ids = [category.id for category in budget.categories]
+    errors.extend(_duplicate_errors(category_ids, "financial category"))
+    if not budget.categories:
+        errors.append("budget.categories must contain at least one financial category.")
+    cost_item_ids = [item.id for item in budget.cost_items]
+    errors.extend(_duplicate_errors(cost_item_ids, "cost item"))
+    booking_ids = {booking.id for booking in model.bookings}
+    category_id_set = set(category_ids)
+    for index, item in enumerate(budget.cost_items):
+        path = f"budget.cost_items[{index}]"
+        if item.category_id not in category_id_set:
+            errors.append(f"{path}.category_id references unknown financial category {item.category_id!r}.")
+        if item.visit_id and item.visit_id not in visit_ids:
+            errors.append(f"{path}.visit_id references unknown visit {item.visit_id!r}.")
+        if item.event_id and item.event_id not in event_ids:
+            errors.append(f"{path}.event_id references unknown event {item.event_id!r}.")
+        if item.booking_id and item.booking_id not in booking_ids:
+            errors.append(f"{path}.booking_id references unknown booking {item.booking_id!r}.")
+        if item.location_id and item.location_id not in location_ids:
+            errors.append(f"{path}.location_id references unknown location {item.location_id!r}.")
+        if item.visit_id:
+            visit = visit_by_id.get(item.visit_id)
+            if visit and item.location_id and item.location_id != visit.location_id:
+                errors.append(f"{path}.location_id must match its referenced visit location.")
+        if item.event_id:
+            event = next((event for event in model.events if event.id == item.event_id), None)
+            if event and item.visit_id and item.visit_id != event.visit_id:
+                errors.append(f"{path}.visit_id must match its referenced event visit.")
+            if event and item.location_id and item.location_id != event.location_id:
+                errors.append(f"{path}.location_id must match its referenced event location.")
+        if item.booking_id:
+            booking = next((booking for booking in model.bookings if booking.id == item.booking_id), None)
+            if booking and item.visit_id and booking.visit_id and item.visit_id != booking.visit_id:
+                errors.append(f"{path}.visit_id must match its referenced booking visit.")
+            if booking and item.event_id and booking.event_id and item.event_id != booking.event_id:
+                errors.append(f"{path}.event_id must match its referenced booking event.")
+        if item.expected.quantity_source != "manual" and not item.visit_id:
+            errors.append(f"{path}.expected.quantity_source requires visit_id.")
+        if item.start_date and not (metadata.start_date <= item.start_date <= metadata.end_date):
+            errors.append(f"{path}.start_date lies outside the itinerary date range.")
+        if item.end_date and not (metadata.start_date <= item.end_date <= metadata.end_date):
+            errors.append(f"{path}.end_date lies outside the itinerary date range.")
+        if item.start_date and item.end_date and item.end_date < item.start_date:
+            errors.append(f"{path}.end_date must not be earlier than start_date.")
+        payment_ids = [payment.id for payment in item.payments]
+        errors.extend(_duplicate_errors(payment_ids, f"payment in cost item {item.id}"))
+
     return list(dict.fromkeys(errors))
 
 
+def _budget_warnings(model: ItineraryV6) -> list[str]:
+    warnings: list[str] = []
+    visit_by_id = {visit.id: visit for visit in model.visits}
+    expected_total = Decimal("0")
+    all_expected_have_fx = True
+    for item in model.budget.cost_items:
+        expected = _cost_expected_amount(item, visit_by_id)
+        committed = Decimal(item.committed_amount)
+        paid = _cost_paid_amount(item)
+        if committed > expected:
+            warnings.append(f"Cost item {item.id!r} has committed amount greater than its expected cost.")
+        if paid > expected:
+            warnings.append(f"Cost item {item.id!r} has paid amount greater than its expected cost.")
+        if item.currency == model.budget.base_currency:
+            expected_total += expected
+        elif item.fx.rate_to_base:
+            expected_total += expected * Decimal(item.fx.rate_to_base)
+        else:
+            all_expected_have_fx = False
+            warnings.append(f"Cost item {item.id!r} is in {item.currency} and has no FX rate to {model.budget.base_currency}.")
+        if item.booking_id:
+            booking = next((booking for booking in model.bookings if booking.id == item.booking_id), None)
+            if booking and booking.status == "booked" and committed == 0:
+                warnings.append(f"Booked booking {item.booking_id!r} has a linked cost item with no committed amount.")
+    if all_expected_have_fx and expected_total > Decimal(model.budget.total_budget):
+        warnings.append("Expected trip cost exceeds the total trip budget.")
+    return list(dict.fromkeys(warnings))
+
+
 def validate_current_itinerary(data: Any) -> dict[str, list[str]]:
-    """Validate schema v5 without mutating or normalising the supplied document."""
+    """Validate canonical schema v6 without mutating or normalising the supplied document."""
 
     if not isinstance(data, dict):
         return {"errors": ["The itinerary must be a JSON object."], "warnings": []}
@@ -519,10 +832,11 @@ def validate_current_itinerary(data: Any) -> dict[str, list[str]]:
     except (TypeError, ValueError) as exc:
         return {"errors": [f"The itinerary must contain only standard JSON values: {exc}"], "warnings": []}
     try:
-        model = ItineraryV5.model_validate(data)
+        model = ItineraryV6.model_validate(data)
     except ValidationError as exc:
         return {"errors": _format_pydantic_errors(exc), "warnings": []}
-    return {"errors": _cross_record_errors(model), "warnings": []}
+    errors = _cross_record_errors(model)
+    return {"errors": errors, "warnings": [] if errors else _budget_warnings(model)}
 
 
 def _legacy_text(value: Any) -> str:
@@ -620,7 +934,35 @@ def migrate_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-MIGRATIONS = {4: migrate_v4_to_v5}
+def default_budget(base_currency: str) -> dict[str, Any]:
+    """The deterministic, intentionally empty starting point for schema v6 finance."""
+
+    return {
+        "base_currency": base_currency,
+        "total_budget": "0",
+        "categories": [
+            {"id": category_id, "name": name, "colour": colour}
+            for category_id, name, colour in DEFAULT_FINANCIAL_CATEGORIES
+        ],
+        "cost_items": [],
+    }
+
+
+def migrate_v5_to_v6(data: dict[str, Any]) -> dict[str, Any]:
+    """Add the explicit financial foundation without inferring prices from bookings."""
+
+    migrated = copy.deepcopy(data)
+    metadata = migrated.get("metadata")
+    if not isinstance(metadata, dict):
+        raise MigrationError("metadata must be an object in schema version 5")
+    default_currency = metadata.get("default_currency", "")
+    base_currency = default_currency if isinstance(default_currency, str) and re.fullmatch(r"[A-Z]{3}", default_currency) else "USD"
+    migrated["budget"] = default_budget(base_currency)
+    migrated["schema_version"] = 6
+    return migrated
+
+
+MIGRATIONS = {4: migrate_v4_to_v5, 5: migrate_v5_to_v6}
 
 
 def migrate_to_current(data: Any) -> tuple[dict[str, Any], list[str], int]:

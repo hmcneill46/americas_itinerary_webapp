@@ -22,7 +22,7 @@ For meaningful frontend, layout or interaction changes, perform actual screensho
 ## Non-negotiable data rules
 
 - The JSON document is the product boundary: it must remain human-readable, deterministic, portable and safe for AI-assisted export/edit/import.
-- Increment `schema_version` only for a real format change. Add one deterministic migration per version, retain unknown/legacy values, validate the migrated result, document it, and add fixture-based migration and idempotence tests.
+- Increment `schema_version` only for a real format change. Add one deterministic migration per version, retain unknown/legacy values, validate the migrated result, document it, and add fixture-based migration and idempotence tests. Budget money is exact decimal strings in JSON, not JavaScript/Python binary floats; keep its shared calculations in `static/budget.js` so summaries and breakdowns agree.
 - Defined fields must not rely on array positions. IDs must be stable and references must validate.
 - Event timestamps are floating local wall-clock values (`YYYY-MM-DDTHH:MM`) with no `Z` or UTC offset. Do not let browser or server timezone conversion alter them.
 - Preserve unknown JSON extension fields. Never silently discard meaningful user data during validation or migration.

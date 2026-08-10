@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#16324f">
   <title>Trip Planner</title>
   <link rel="stylesheet" href="/static/vendor/maplibre-gl/maplibre-gl.css">
-  <link rel="stylesheet" href="/static/styles.css?v=map-marker-anchor-1">
+  <link rel="stylesheet" href="/static/styles.css?v=budget-v5">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -21,6 +21,7 @@
       <nav class="primary-tabs" aria-label="Main views">
         <button class="tab-button active" data-tab="day">Day bars</button>
         <button class="tab-button" data-tab="map">Map</button>
+        <button class="tab-button" data-tab="budget">Budget</button>
         <button class="tab-button" data-tab="edit">Edit</button>
       </nav>
       <div class="top-status">
@@ -101,6 +102,14 @@
             <div id="map-route-list" class="map-route-list"></div>
           </aside>
         </div>
+      </section>
+
+      <section id="view-budget" class="view-panel" aria-label="Trip budget view">
+        <div class="budget-toolbar view-toolbar">
+          <div><strong>Trip budget</strong><span id="budget-toolbar-note" class="toolbar-note"></span></div>
+          <div class="toolbar-group"><button id="budget-settings-button" class="secondary-button">Budget settings</button><button id="quick-expense-button" class="secondary-button">+ Quick expense</button><button id="add-cost-button" class="primary-button">+ Cost item</button></div>
+        </div>
+        <div id="budget-content" class="budget-content"></div>
       </section>
 
       <section id="view-edit" class="view-panel" aria-label="Edit view">
@@ -238,6 +247,29 @@
       <div class="dialog-actions"><button value="close" class="primary-button">Close</button></div>
     </form>
   </dialog>
-  <script type="module" src="/static/app.js?v=map-marker-anchor-1"></script>
+  <dialog id="cost-dialog" class="budget-dialog">
+    <form id="cost-form" class="budget-form" autocomplete="off">
+      <div class="dialog-heading"><div><h2 id="cost-dialog-title">Add cost item</h2><p>Amounts are exact decimal values in the item's native currency.</p></div><button type="button" id="close-cost-dialog" class="icon-button" aria-label="Close">×</button></div>
+      <div class="budget-form-body">
+        <input id="cost-id" type="hidden">
+        <label class="span-2">Name<input id="cost-name" required maxlength="160" placeholder="e.g. City hostel"></label>
+        <label>Financial category<select id="cost-category" required></select></label>
+        <label>Native currency<input id="cost-currency" required pattern="[A-Z]{3}" maxlength="3" placeholder="GBP"></label>
+        <fieldset class="budget-fieldset span-2"><legend>Expected cost</legend><div class="form-grid compact-grid"><label>Unit amount<input id="cost-unit-amount" required inputmode="decimal" placeholder="25.00"></label><label>Basis<select id="cost-basis"><option value="fixed">Fixed total</option><option value="per_day">Per day</option><option value="per_night">Per night</option><option value="per_person">Per person</option><option value="per_unit">Per unit</option></select></label><label>Quantity source<select id="cost-quantity-source"><option value="manual">Enter quantity</option><option value="visit_days">Derive visit days</option><option value="visit_nights">Derive visit nights</option></select></label><label>Quantity<input id="cost-quantity" type="number" min="0" step="1" value="1"></label></div><p id="cost-expected-preview" class="form-help"></p></fieldset>
+        <fieldset class="budget-fieldset span-2"><legend>Commitment and FX</legend><div class="form-grid compact-grid"><label>Committed amount<input id="cost-committed" inputmode="decimal" value="0"></label><label>Rate to base currency<input id="cost-fx-rate" inputmode="decimal" placeholder="Required for foreign currency"></label><label>Rate as-of date<input id="cost-fx-date" type="date"></label><label>Rate source<input id="cost-fx-source" placeholder="Manual planning rate"></label></div></fieldset>
+        <fieldset class="budget-fieldset span-2"><legend>Applies to</legend><div class="form-grid compact-grid"><label>Visit<select id="cost-visit"></select></label><label>Event<select id="cost-event"></select></label><label>Booking<select id="cost-booking"></select></label><label>Location<select id="cost-location"></select></label><label>Start date<input id="cost-start-date" type="date"></label><label>End date<input id="cost-end-date" type="date"></label></div></fieldset>
+        <label class="span-2">Notes<textarea id="cost-notes" rows="3"></textarea></label>
+        <section id="cost-payments-section" class="span-2 payment-editor"><div class="section-heading"><div><h3>Payments and refunds</h3><p>Recorded amounts change paid/spent without changing the expected estimate.</p></div></div><div id="cost-payments-list"></div><div class="payment-add-row"><select id="payment-kind"><option value="payment">Payment / deposit</option><option value="refund">Refund</option><option value="adjustment">Signed adjustment</option></select><input id="payment-amount" inputmode="decimal" placeholder="Amount"><input id="payment-date" type="date"><input id="payment-note" placeholder="Optional note"><button type="button" id="add-payment-button" class="secondary-button">Add</button></div></section>
+      </div>
+      <div class="dialog-actions"><button type="button" id="delete-cost-button" class="danger-button">Delete</button><span class="dialog-spacer"></span><button type="button" id="cancel-cost-button" class="secondary-button">Cancel</button><button type="submit" class="primary-button">Apply to draft</button></div>
+    </form>
+  </dialog>
+  <dialog id="quick-expense-dialog" class="budget-dialog quick-expense-dialog">
+    <form id="quick-expense-form" class="budget-form" autocomplete="off"><div class="dialog-heading"><div><h2>Record quick expense</h2><p>This creates a normal cost item with a payment, ready to save with the rest of the trip.</p></div><button type="button" id="close-quick-expense-dialog" class="icon-button" aria-label="Close">×</button></div><div class="budget-form-body form-grid"><label class="span-2">What did you pay for?<input id="quick-expense-name" required placeholder="Taxi to hotel"></label><label>Amount<input id="quick-expense-amount" required inputmode="decimal" placeholder="22"></label><label>Currency<input id="quick-expense-currency" required maxlength="3" pattern="[A-Z]{3}" placeholder="PEN"></label><label>Category<select id="quick-expense-category"></select></label><label>Date<input id="quick-expense-date" type="date"></label><label class="span-2">Visit (optional)<select id="quick-expense-visit"></select></label><label class="span-2">Note<textarea id="quick-expense-note" rows="2"></textarea></label></div><div class="dialog-actions"><button type="button" id="cancel-quick-expense-button" class="secondary-button">Cancel</button><button type="submit" class="primary-button">Record expense</button></div></form>
+  </dialog>
+  <dialog id="budget-settings-dialog" class="budget-dialog quick-expense-dialog">
+    <form id="budget-settings-form" class="budget-form" autocomplete="off"><div class="dialog-heading"><div><h2>Budget settings</h2><p>The base currency is used only for reporting; every cost keeps its native currency.</p></div><button type="button" id="close-budget-settings-dialog" class="icon-button" aria-label="Close">×</button></div><div class="budget-form-body form-grid"><label>Base/reporting currency<input id="budget-base-currency" required maxlength="3" pattern="[A-Z]{3}" placeholder="GBP"></label><label>Total trip budget<input id="budget-total-budget" required inputmode="decimal" placeholder="2500.00"></label><p class="form-help span-2">Foreign-currency items need a stored rate to this currency before totals are complete. Changing the base currency does not rewrite native prices or rates.</p></div><div class="dialog-actions"><button type="button" id="cancel-budget-settings-button" class="secondary-button">Cancel</button><button type="submit" class="primary-button">Apply to draft</button></div></form>
+  </dialog>
+  <script type="module" src="/static/app.js?v=budget-v5"></script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 import { loadMapConfig } from './map-config.js?v=map-marker-anchor-1';
 import { buildTripMapModel, routeForDay } from './map-data.js?v=map-marker-anchor-1';
 import { TripMap } from './map-view.js?v=map-marker-anchor-1';
+import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuantity } from './budget.js?v=budget-v5';
 
 'use strict';
 
@@ -28,6 +29,9 @@ const state = {
   mapModel: null,
   pendingMapFocus: null,
   mapExpanded: false,
+  budgetCategoryFilter: '',
+  budgetSearch: '',
+  costDialogItem: null,
 };
 
 const el = id => document.getElementById(id);
@@ -238,6 +242,8 @@ function renderEverything() {
     renderEventDetails();
   } else if (state.activeTab === 'map') {
     renderMap(true);
+  } else if (state.activeTab === 'budget') {
+    renderBudget();
   } else if (state.activeTab === 'edit') {
     renderEditView();
   }
@@ -250,6 +256,7 @@ function switchTab(tab) {
   window.scrollTo(0, 0);
   if (tab === 'day') { renderDayView(); renderEventDetails(); }
   if (tab === 'map') renderMap(false);
+  if (tab === 'budget') renderBudget();
   if (tab === 'edit') renderEditView();
 }
 
@@ -658,6 +665,123 @@ function toggleMapExpanded(force = !state.mapExpanded) {
   el('map-expand').textContent = state.mapExpanded ? 'Close expanded map' : 'Expand map';
   el('map-expand').setAttribute('aria-pressed', String(state.mapExpanded));
   requestAnimationFrame(() => state.mapController?.resize());
+}
+
+/* ---------------- Budget ---------------- */
+function budgetReference(item, data) {
+  if (item.visit_id) {
+    const visit = getVisit(item.visit_id, data); const location = visit && getLocation(visit.location_id, data);
+    return visit ? `${location?.name || visit.location_id} · Visit ${visit.order}` : item.visit_id;
+  }
+  if (item.location_id) return getLocation(item.location_id, data)?.name || item.location_id;
+  return 'Whole trip';
+}
+
+function budgetBarWidth(value, maximum) {
+  if (!maximum || decimalCompare(maximum, '0') <= 0) return 0;
+  return Math.max(0, Math.min(100, (Number(value) / Number(maximum)) * 100));
+}
+
+function budgetRow(row, currency, kind) {
+  const incomplete = row.incomplete ? ' · FX needed' : '';
+  return `<button class="budget-breakdown-row" data-budget-filter-kind="${kind}" data-budget-filter-id="${escapeHtml(row.id)}"><span><strong>${escapeHtml(row.label)}</strong><small>${row.items.length} item${row.items.length === 1 ? '' : 's'}${incomplete}</small></span><span class="amount">${formatMoney(row.expected, currency)}</span></button>`;
+}
+
+function renderBudget() {
+  const data = currentData(); if (!data?.budget) return;
+  const summary = calculateBudget(data); const { totals, baseCurrency } = summary;
+  el('budget-toolbar-note').textContent = `Reporting in ${baseCurrency}`;
+  const completeNote = totals.complete ? 'All items have a stored rate.' : `${totals.missingFx.length} item${totals.missingFx.length === 1 ? '' : 's'} need FX.`;
+  const headroom = totals.headroom === null ? 'Needs FX' : formatMoney(totals.headroom, baseCurrency);
+  const cards = [
+    ['Trip budget', formatMoney(summary.totalBudget, baseCurrency), completeNote, 'emphasis'],
+    ['Expected total', formatMoney(totals.expected, baseCurrency), totals.complete ? 'Current estimate' : 'Partial — FX missing', ''],
+    ['Committed', formatMoney(totals.committed, baseCurrency), 'Reservations and obligations', ''],
+    ['Paid / spent', formatMoney(totals.paid, baseCurrency), 'Payments less refunds', ''],
+    ['Expected still to spend', formatMoney(totals.expectedStillToSpend, baseCurrency), 'Expected less paid', ''],
+    ['Expected, not committed', formatMoney(totals.expectedUncommitted, baseCurrency), 'Flexible estimate', ''],
+    ['Committed, not paid', formatMoney(totals.committedUnpaid, baseCurrency), 'Balances still due', ''],
+    ['Budget headroom', headroom, totals.headroom !== null && decimalCompare(totals.headroom, '0') < 0 ? 'Over budget' : 'Budget less expected', 'emphasis'],
+  ].map(([label, value, note, className]) => `<article class="budget-card ${className}"><small>${label}</small><strong>${value}</strong><p>${note}</p></article>`).join('');
+  const max = summary.totalBudget;
+  const expectedWidth = budgetBarWidth(totals.expected, max); const committedWidth = budgetBarWidth(totals.committed, max); const paidWidth = budgetBarWidth(totals.paid, max);
+  const warnings = summary.warnings.length ? `<div class="budget-warning"><strong>Check budget data:</strong> ${summary.warnings.slice(0, 3).map(warning => warning.kind === 'missing_fx' ? `${escapeHtml(warning.item.name)} needs an FX rate.` : warning.kind === 'over_budget' ? 'Expected cost exceeds the trip budget.' : `${escapeHtml(warning.item.name)} needs a value review.`).join(' ')}</div>` : '';
+  const filterText = state.budgetSearch.trim().toLowerCase();
+  const displayed = summary.items.filter(item => (!state.budgetCategoryFilter || item.category_id === state.budgetCategoryFilter || item.visit_id === state.budgetCategoryFilter) && (!filterText || `${item.name} ${item.notes} ${budgetReference(item, data)}`.toLowerCase().includes(filterText)));
+  const categoryOptions = data.budget.categories.map(category => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`).join('');
+  const items = displayed.length ? displayed.map(item => {
+    const category = data.budget.categories.find(candidate => candidate.id === item.category_id);
+    const baseAmount = item.base ? formatMoney(item.base.expected, baseCurrency) : 'FX needed';
+    const native = `${formatMoney(item.expectedAmount, item.currency)} expected`;
+    const paid = `${formatMoney(item.paidAmount, item.currency)} paid`;
+    const quantity = visitQuantity(item, data);
+    const basis = item.expected.basis === 'fixed' ? 'Fixed' : `${formatMoney(item.expected.unit_amount, item.currency)} ${item.expected.basis.replace('_', ' ')} × ${quantity} = ${formatMoney(item.expectedAmount, item.currency)}`;
+    return `<article class="budget-item"><div class="budget-item-main"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(budgetReference(item, data))} · ${escapeHtml(native)} · ${escapeHtml(basis)}</small><span class="budget-item-tag">${escapeHtml(category?.name || item.category_id)}</span></div><div class="budget-amount-stack"><span>Base expected</span><strong>${baseAmount}</strong></div><div class="budget-amount-stack"><span>Committed / paid</span><strong>${formatMoney(item.committed_amount, item.currency)} / ${escapeHtml(paid)}</strong></div><div class="budget-item-actions"><button class="secondary-button small" data-edit-cost="${escapeHtml(item.id)}">Edit</button></div></article>`;
+  }).join('') : '<div class="budget-empty">No cost items match this filter. Add an estimate or record a quick expense.</div>';
+  el('budget-content').innerHTML = `<section class="budget-summary-grid">${cards}</section><section class="budget-coverage"><div class="budget-coverage-head"><strong>Expected, committed and paid against the trip budget</strong><span>${completeNote}</span></div><div class="budget-track" aria-label="Budget coverage"><span class="expected" style="width:${expectedWidth}%"></span><span class="committed" style="width:${committedWidth}%"></span><span class="paid" style="width:${paidWidth}%"></span></div><div class="budget-key"><span class="expected"><i></i>Expected ${formatMoney(totals.expected, baseCurrency)}</span><span class="committed"><i></i>Committed ${formatMoney(totals.committed, baseCurrency)}</span><span class="paid"><i></i>Paid ${formatMoney(totals.paid, baseCurrency)}</span></div></section>${warnings}<section class="budget-grid"><article class="budget-section"><h2>Where the expected cost goes</h2><p>Tap a category to filter the underlying items.</p><div class="budget-breakdown">${summary.categories.map(row => budgetRow(row, baseCurrency, 'category')).join('') || '<div class="budget-empty">No cost items yet.</div>'}</div></article><article class="budget-section"><h2>By visit and whole-trip costs</h2><p>Repeated visits stay separate.</p><div class="budget-breakdown">${summary.visits.map(row => budgetRow(row, baseCurrency, 'visit')).join('') || '<div class="budget-empty">No visit-linked costs yet.</div>'}</div></article></section><section class="budget-section budget-items-section"><div class="budget-items-toolbar"><div><h2>Cost items</h2><p>Expected, commitment and payment history in one place.</p></div><input id="budget-search" type="search" value="${escapeHtml(state.budgetSearch)}" placeholder="Search costs or places"><select id="budget-category-filter"><option value="">All categories and visits</option>${categoryOptions}</select></div><div id="budget-items" class="budget-items">${items}</div></section>`;
+  el('budget-category-filter').value = data.budget.categories.some(category => category.id === state.budgetCategoryFilter) ? state.budgetCategoryFilter : '';
+  el('budget-search').addEventListener('input', event => { state.budgetSearch = event.target.value; renderBudget(); });
+  el('budget-category-filter').addEventListener('change', event => { state.budgetCategoryFilter = event.target.value; renderBudget(); });
+  document.querySelectorAll('[data-budget-filter-id]').forEach(button => button.addEventListener('click', () => { state.budgetCategoryFilter = button.dataset.budgetFilterId; state.budgetSearch = ''; renderBudget(); document.querySelector('.budget-items-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
+  document.querySelectorAll('[data-edit-cost]').forEach(button => button.addEventListener('click', () => openCostDialog(data.budget.cost_items.find(item => item.id === button.dataset.editCost))));
+}
+
+function budgetOptions(items, selected, blankLabel = '—') { return `<option value="">${blankLabel}</option>${items.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === selected ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}`; }
+
+function renderCostPayments() {
+  const item = state.costDialogItem;
+  el('cost-payments-list').innerHTML = item.payments.length ? item.payments.map(payment => `<div class="payment-row"><span><strong>${escapeHtml(payment.kind)}</strong> · ${escapeHtml(payment.date || 'No date')}<small>${escapeHtml(payment.note || '')}</small></span><span>${escapeHtml(formatMoney(payment.amount, item.currency))} <button type="button" class="linkish-button" data-remove-payment="${escapeHtml(payment.id)}">Remove</button></span></div>`).join('') : '<div class="payment-row"><span><small>No payments recorded yet.</small></span></div>';
+  document.querySelectorAll('[data-remove-payment]').forEach(button => button.addEventListener('click', () => { item.payments = item.payments.filter(payment => payment.id !== button.dataset.removePayment); renderCostPayments(); }));
+}
+
+function updateCostExpectedPreview() {
+  const unit = el('cost-unit-amount').value || '0'; const basis = el('cost-basis').value; const source = el('cost-quantity-source').value; const quantity = source === 'manual' ? el('cost-quantity').value || '0' : 'derived from selected visit';
+  try { el('cost-expected-preview').textContent = basis === 'fixed' ? `Expected total: ${formatMoney(unit, el('cost-currency').value.toUpperCase() || '???')}` : `Expected: ${formatMoney(unit, el('cost-currency').value.toUpperCase() || '???')} × ${quantity}`; } catch { el('cost-expected-preview').textContent = 'Enter an exact decimal amount.'; }
+}
+
+function openCostDialog(existing = null) {
+  const data = currentData(); const budget = data.budget;
+  state.costDialogItem = deepClone(existing || { id: '', name: '', category_id: budget.categories[0]?.id || 'miscellaneous', currency: budget.base_currency, expected: { unit_amount: '', basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '0', fx: { rate_to_base: budget.base_currency === 'USD' ? '1' : '', as_of_date: '', source: '', note: '' }, payments: [], visit_id: '', event_id: '', booking_id: '', location_id: '', start_date: '', end_date: '', notes: '' });
+  const item = state.costDialogItem;
+  el('cost-dialog-title').textContent = existing ? 'Edit cost item' : 'Add cost item';
+  el('cost-id').value = item.id; el('cost-name').value = item.name; el('cost-currency').value = item.currency; el('cost-unit-amount').value = item.expected.unit_amount; el('cost-basis').value = item.expected.basis; el('cost-quantity-source').value = item.expected.quantity_source; el('cost-quantity').value = item.expected.quantity; el('cost-committed').value = item.committed_amount; el('cost-fx-rate').value = item.fx.rate_to_base; el('cost-fx-date').value = item.fx.as_of_date; el('cost-fx-source').value = item.fx.source; el('cost-notes').value = item.notes; el('cost-start-date').value = item.start_date; el('cost-end-date').value = item.end_date;
+  refreshSelectOptions(el('cost-category'), budget.categories.map(category => ({ value: category.id, label: category.name })), item.category_id);
+  el('cost-visit').innerHTML = budgetOptions(sortedVisits(data).map(visit => ({ id: visit.id, label: `Visit ${visit.order} · ${getLocation(visit.location_id, data)?.name || visit.location_id}` })), item.visit_id); el('cost-event').innerHTML = budgetOptions(sortedEvents(data).map(event => ({ id: event.id, label: event.title })), item.event_id); el('cost-booking').innerHTML = budgetOptions(data.bookings.map(booking => ({ id: booking.id, label: booking.title })), item.booking_id); el('cost-location').innerHTML = budgetOptions(Object.values(data.locations).map(location => ({ id: location.id, label: `${location.name} · ${location.country}` })), item.location_id);
+  el('delete-cost-button').hidden = !existing; el('cost-quantity').disabled = item.expected.quantity_source !== 'manual';
+  renderCostPayments(); updateCostExpectedPreview(); el('cost-dialog').showModal();
+}
+
+function applyCostDialog() {
+  const item = state.costDialogItem; const data = state.draft; const source = el('cost-quantity-source').value; const basis = el('cost-basis').value;
+  item.id = el('cost-id').value || generateId('cost'); item.name = el('cost-name').value.trim(); item.category_id = el('cost-category').value; item.currency = el('cost-currency').value.trim().toUpperCase(); item.expected = { unit_amount: el('cost-unit-amount').value.trim(), basis, quantity_source: basis === 'fixed' ? 'manual' : source, quantity: basis === 'fixed' ? 1 : source === 'manual' ? Number(el('cost-quantity').value) : 0 }; item.committed_amount = el('cost-committed').value.trim() || '0'; item.fx = { rate_to_base: el('cost-fx-rate').value.trim(), as_of_date: el('cost-fx-date').value, source: el('cost-fx-source').value.trim(), note: item.fx.note || '' }; item.visit_id = el('cost-visit').value; item.event_id = el('cost-event').value; item.booking_id = el('cost-booking').value; item.location_id = el('cost-location').value; item.start_date = el('cost-start-date').value; item.end_date = el('cost-end-date').value; item.notes = el('cost-notes').value.trim();
+  const index = data.budget.cost_items.findIndex(candidate => candidate.id === item.id); if (index === -1) data.budget.cost_items.push(item); else data.budget.cost_items[index] = item;
+  el('cost-dialog').close(); markDirty(`Budget cost changed: ${item.name || 'new item'}`); renderBudget();
+}
+
+function addDialogPayment() {
+  const amount = el('payment-amount').value.trim(); if (!amount) { toast('Enter a payment amount first.', 'error'); return; }
+  state.costDialogItem.currency = el('cost-currency').value.trim().toUpperCase() || state.costDialogItem.currency;
+  state.costDialogItem.payments.push({ id: generateId('payment'), kind: el('payment-kind').value, amount, date: el('payment-date').value, note: el('payment-note').value.trim() }); el('payment-amount').value = ''; el('payment-note').value = ''; renderCostPayments();
+}
+
+function recordQuickExpense() {
+  const data = state.draft; const amount = el('quick-expense-amount').value.trim(); const currency = el('quick-expense-currency').value.trim().toUpperCase(); const visitId = el('quick-expense-visit').value; const visit = getVisit(visitId, data);
+  const item = { id: generateId('cost'), name: el('quick-expense-name').value.trim(), category_id: el('quick-expense-category').value, currency, expected: { unit_amount: amount, basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '0', fx: { rate_to_base: currency === data.budget.base_currency ? '1' : '', as_of_date: el('quick-expense-date').value, source: '', note: '' }, payments: [{ id: generateId('payment'), kind: 'payment', amount, date: el('quick-expense-date').value, note: el('quick-expense-note').value.trim() }], visit_id: visitId, event_id: '', booking_id: '', location_id: visit?.location_id || '', start_date: el('quick-expense-date').value, end_date: el('quick-expense-date').value, notes: 'Quick actual expense.' };
+  data.budget.cost_items.push(item); el('quick-expense-dialog').close(); markDirty(`Recorded expense: ${item.name}`); renderBudget();
+}
+
+function openBudgetSettings() {
+  const budget = currentData().budget;
+  el('budget-base-currency').value = budget.base_currency;
+  el('budget-total-budget').value = budget.total_budget;
+  el('budget-settings-dialog').showModal();
+}
+
+function applyBudgetSettings() {
+  const budget = state.draft.budget;
+  budget.base_currency = el('budget-base-currency').value.trim().toUpperCase();
+  budget.total_budget = el('budget-total-budget').value.trim();
+  el('budget-settings-dialog').close(); markDirty('Budget settings changed'); renderBudget();
 }
 
 /* ---------------- Edit view ---------------- */
@@ -1125,6 +1249,28 @@ function bindEvents() {
   });
   el('map-expand').addEventListener('click', () => toggleMapExpanded());
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && state.mapExpanded) toggleMapExpanded(false); });
+
+  el('add-cost-button').addEventListener('click', () => openCostDialog());
+  el('budget-settings-button').addEventListener('click', openBudgetSettings);
+  el('quick-expense-button').addEventListener('click', () => {
+    const data = currentData();
+    el('quick-expense-name').value = ''; el('quick-expense-amount').value = ''; el('quick-expense-currency').value = data.budget.base_currency; el('quick-expense-date').value = state.selectedDate || data.metadata.start_date; el('quick-expense-note').value = '';
+    refreshSelectOptions(el('quick-expense-category'), data.budget.categories.map(category => ({ value: category.id, label: category.name })), data.budget.categories.find(category => category.id === 'local_transport')?.id || data.budget.categories[0]?.id);
+    el('quick-expense-visit').innerHTML = budgetOptions(sortedVisits(data).map(visit => ({ id: visit.id, label: `Visit ${visit.order} · ${getLocation(visit.location_id, data)?.name || visit.location_id}` })), '');
+    el('quick-expense-dialog').showModal();
+  });
+  el('close-cost-dialog').addEventListener('click', () => el('cost-dialog').close());
+  el('cancel-cost-button').addEventListener('click', () => el('cost-dialog').close());
+  el('delete-cost-button').addEventListener('click', () => { const item = state.costDialogItem; if (!item || !confirm(`Delete ${item.name}?`)) return; state.draft.budget.cost_items = state.draft.budget.cost_items.filter(candidate => candidate.id !== item.id); el('cost-dialog').close(); markDirty(`Deleted budget cost: ${item.name}`); renderBudget(); });
+  el('cost-form').addEventListener('submit', event => { event.preventDefault(); applyCostDialog(); });
+  el('add-payment-button').addEventListener('click', addDialogPayment);
+  ['cost-unit-amount', 'cost-basis', 'cost-quantity-source', 'cost-quantity', 'cost-currency'].forEach(id => el(id).addEventListener('input', () => { el('cost-quantity').disabled = el('cost-quantity-source').value !== 'manual' || el('cost-basis').value === 'fixed'; updateCostExpectedPreview(); }));
+  el('quick-expense-form').addEventListener('submit', event => { event.preventDefault(); recordQuickExpense(); });
+  el('close-quick-expense-dialog').addEventListener('click', () => el('quick-expense-dialog').close());
+  el('cancel-quick-expense-button').addEventListener('click', () => el('quick-expense-dialog').close());
+  el('budget-settings-form').addEventListener('submit', event => { event.preventDefault(); applyBudgetSettings(); });
+  el('close-budget-settings-dialog').addEventListener('click', () => el('budget-settings-dialog').close());
+  el('cancel-budget-settings-button').addEventListener('click', () => el('budget-settings-dialog').close());
 
   el('event-search').addEventListener('input', renderEventEditor);
   el('add-event').addEventListener('click', addEvent);

@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "metadata": {
     "title": "European Rail Weekend",
     "description": "Public demo data showing a short multi-country trip with local times, route changes and bookings.",
@@ -8,7 +8,7 @@
     "home_location_id": "london",
     "time_model": "floating_local",
     "time_model_note": "Event timestamps are local wall-clock times at the relevant location and never include UTC offsets.",
-    "default_currency": "EUR",
+    "default_currency": "GBP",
     "category_colours": {
       "Sleep": "#294C60",
       "Meal": "#F4D6A0",
@@ -369,5 +369,109 @@
       "location_id": "paris",
       "legacy": {}
     }
-  ]
+  ],
+  "budget": {
+    "base_currency": "GBP",
+    "total_budget": "850.00",
+    "categories": [
+      {"id": "accommodation", "name": "Accommodation", "colour": "#6C63A8"},
+      {"id": "long_distance_transport", "name": "Long-distance Transport", "colour": "#E58C47"},
+      {"id": "local_transport", "name": "Local Transport", "colour": "#527284"},
+      {"id": "food_drink", "name": "Food & Drink", "colour": "#D58F52"},
+      {"id": "activities_tours", "name": "Activities & Tours", "colour": "#7FB77E"},
+      {"id": "treks_expeditions", "name": "Treks / Expeditions", "colour": "#498C8A"},
+      {"id": "visas_admin", "name": "Visas & Admin", "colour": "#E8C547"},
+      {"id": "insurance", "name": "Insurance", "colour": "#607D8B"},
+      {"id": "gear_equipment", "name": "Gear / Equipment", "colour": "#8064A2"},
+      {"id": "communications", "name": "Communications", "colour": "#4C8DA8"},
+      {"id": "miscellaneous", "name": "Miscellaneous", "colour": "#8A7C70"}
+    ],
+    "cost_items": [
+      {
+        "id": "cost_rail_london_paris",
+        "name": "London to Paris rail ticket",
+        "category_id": "long_distance_transport",
+        "currency": "GBP",
+        "expected": {"unit_amount": "92.00", "basis": "fixed", "quantity_source": "manual", "quantity": 1},
+        "committed_amount": "92.00",
+        "fx": {"rate_to_base": "1", "as_of_date": "2027-01-12", "source": "Ticket confirmation", "note": "Base currency item."},
+        "payments": [{"id": "payment_rail_full", "kind": "payment", "amount": "92.00", "date": "2027-01-12", "note": "Paid when booked."}],
+        "visit_id": "paris_01",
+        "event_id": "evt_train_london_paris",
+        "booking_id": "booking_train_london_paris",
+        "location_id": "paris",
+        "start_date": "2027-04-09",
+        "end_date": "2027-04-09",
+        "notes": "A fully paid transport booking."
+      },
+      {
+        "id": "cost_paris_accommodation",
+        "name": "Paris accommodation",
+        "category_id": "accommodation",
+        "currency": "EUR",
+        "expected": {"unit_amount": "180.00", "basis": "fixed", "quantity_source": "manual", "quantity": 1},
+        "committed_amount": "180.00",
+        "fx": {"rate_to_base": "0.86", "as_of_date": "2027-01-15", "source": "Manual planning rate", "note": "1 EUR = 0.86 GBP."},
+        "payments": [{"id": "payment_paris_deposit", "kind": "payment", "amount": "60.00", "date": "2027-01-15", "note": "Deposit paid."}],
+        "visit_id": "paris_01",
+        "event_id": "evt_paris_checkin",
+        "booking_id": "booking_paris_stay",
+        "location_id": "paris",
+        "start_date": "2027-04-09",
+        "end_date": "2027-04-10",
+        "notes": "Booked stay with a remaining balance."
+      },
+      {
+        "id": "cost_paris_food",
+        "name": "Paris food allowance",
+        "category_id": "food_drink",
+        "currency": "EUR",
+        "expected": {"unit_amount": "25.00", "basis": "per_day", "quantity_source": "visit_days", "quantity": 0},
+        "committed_amount": "0",
+        "fx": {"rate_to_base": "0.86", "as_of_date": "2027-01-15", "source": "Manual planning rate", "note": "Derived from the two-day Paris visit."},
+        "payments": [],
+        "visit_id": "paris_01",
+        "event_id": "",
+        "booking_id": "",
+        "location_id": "paris",
+        "start_date": "2027-04-09",
+        "end_date": "2027-04-10",
+        "notes": "Flexible daily estimate, not a reservation."
+      },
+      {
+        "id": "cost_paris_museum",
+        "name": "Museum timed entry estimate",
+        "category_id": "activities_tours",
+        "currency": "EUR",
+        "expected": {"unit_amount": "22.00", "basis": "fixed", "quantity_source": "manual", "quantity": 1},
+        "committed_amount": "0",
+        "fx": {"rate_to_base": "0.86", "as_of_date": "2027-01-15", "source": "Manual planning rate", "note": "Unbooked estimate."},
+        "payments": [],
+        "visit_id": "paris_01",
+        "event_id": "evt_paris_museum",
+        "booking_id": "booking_paris_museum",
+        "location_id": "paris",
+        "start_date": "2027-04-10",
+        "end_date": "2027-04-10",
+        "notes": "An expected cost that is not yet committed."
+      },
+      {
+        "id": "cost_amsterdam_stay",
+        "name": "Amsterdam accommodation",
+        "category_id": "accommodation",
+        "currency": "EUR",
+        "expected": {"unit_amount": "150.00", "basis": "per_night", "quantity_source": "visit_nights", "quantity": 0},
+        "committed_amount": "150.00",
+        "fx": {"rate_to_base": "0.86", "as_of_date": "2027-01-16", "source": "Manual planning rate", "note": "One derived night."},
+        "payments": [{"id": "payment_amsterdam_full", "kind": "payment", "amount": "150.00", "date": "2027-01-16", "note": "Paid in full."}],
+        "visit_id": "amsterdam_01",
+        "event_id": "evt_amsterdam_stay",
+        "booking_id": "",
+        "location_id": "amsterdam",
+        "start_date": "2027-04-11",
+        "end_date": "2027-04-12",
+        "notes": "A fully paid nightly cost."
+      }
+    ]
+  }
 }

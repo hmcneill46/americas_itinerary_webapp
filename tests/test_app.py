@@ -35,6 +35,7 @@ def legacy_v4_itinerary() -> tuple[dict, list]:
         {"future_column": "must survive"},
     ]
     data["schema_version"] = 4
+    data.pop("budget", None)
     data["bookings"] = [row]
     data["legacy_root_extension"] = {"keep": True}
     return data, row
@@ -83,10 +84,12 @@ def test_v4_booking_migration_is_deterministic_lossless_and_idempotent():
 
     assert legacy == untouched
     assert source_version == 4
-    assert applied == ["v4->v5"]
+    assert applied == ["v4->v5", "v5->v6"]
     assert second_applied == []
     assert first == second == repeated
-    assert first["schema_version"] == 5
+    assert first["schema_version"] == 6
+    assert first["budget"]["cost_items"] == []
+    assert first["budget"]["base_currency"] == "GBP"
     assert first["legacy_root_extension"] == {"keep": True}
     booking = first["bookings"][0]
     assert booking["id"].startswith("booking_001_")
@@ -99,14 +102,34 @@ def test_v4_booking_migration_is_deterministic_lossless_and_idempotent():
     assert validate_current_itinerary(first)["errors"] == []
 
 
+def test_v5_budget_migration_is_deterministic_and_preserves_existing_content():
+    legacy = load_example()
+    legacy["schema_version"] = 5
+    budget = legacy.pop("budget")
+    legacy["legacy_extension"] = {"keep": ["me"]}
+
+    migrated, applied, source_version = migrate_to_current(legacy)
+    repeated, repeated_applied, _ = migrate_to_current(migrated)
+
+    assert source_version == 5
+    assert applied == ["v5->v6"]
+    assert repeated_applied == []
+    assert migrated == repeated
+    assert migrated["budget"]["base_currency"] == "GBP"
+    assert migrated["budget"]["cost_items"] == []
+    assert len(migrated["budget"]["categories"]) >= 10
+    assert migrated["legacy_extension"] == {"keep": ["me"]}
+    assert budget["cost_items"]  # The v5 input had no financial interpretation to infer.
+
+
 def test_validate_endpoint_returns_migrated_document():
     legacy, _ = legacy_v4_itinerary()
     response = TestClient(itinerary_app.app).post("/api/validate", json={"itinerary": legacy})
     body = response.json()
     assert response.status_code == 200
     assert body["valid"] is True
-    assert body["migrations"] == ["v4->v5"]
-    assert body["itinerary"]["schema_version"] == 5
+    assert body["migrations"] == ["v4->v5", "v5->v6"]
+    assert body["itinerary"]["schema_version"] == 6
     assert isinstance(body["itinerary"]["bookings"][0], dict)
 
 
@@ -119,8 +142,8 @@ def test_get_migrates_legacy_file_in_memory_without_rewriting(tmp_path, monkeypa
     body = response.json()
 
     assert response.status_code == 200
-    assert body["migrations"] == ["v4->v5"]
-    assert body["itinerary"]["schema_version"] == 5
+    assert body["migrations"] == ["v4->v5", "v5->v6"]
+    assert body["itinerary"]["schema_version"] == 6
     assert target.read_bytes() == original_bytes
 
 
@@ -278,6 +301,55 @@ def test_structured_booking_fields_and_references_are_validated():
     assert_invalid(data, "absolute http(s) URL")
 
 
+def test_budget_validation_references_money_and_warnings():
+    data = load_example()
+    assert itinerary_app.validate_itinerary(data)["errors"] == []
+
+    data = load_example()
+    data["budget"]["base_currency"] = "gbp"
+    assert_invalid(data, "three-letter uppercase")
+
+    data = load_example()
+    data["budget"]["cost_items"][0]["expected"]["unit_amount"] = 92.0
+    assert_invalid(data, "unit_amount")
+
+    data = load_example()
+    data["budget"]["cost_items"][0]["category_id"] = "missing"
+    assert_invalid(data, "unknown financial category")
+
+    data = load_example()
+    data["budget"]["cost_items"][0]["payments"].append(copy.deepcopy(data["budget"]["cost_items"][0]["payments"][0]))
+    assert_invalid(data, "Duplicate payment")
+
+    data = load_example()
+    data["budget"]["cost_items"][1]["fx"]["rate_to_base"] = ""
+    result = itinerary_app.validate_itinerary(data)
+    assert result["errors"] == []
+    assert any("no FX rate" in warning for warning in result["warnings"])
+
+    data = load_example()
+    data["budget"]["cost_items"][0]["committed_amount"] = "500"
+    result = itinerary_app.validate_itinerary(data)
+    assert result["errors"] == []
+    assert any("greater than its expected" in warning for warning in result["warnings"])
+
+    data = load_example()
+    data["budget"]["cost_items"][0]["visit_id"] = "deleted_visit"
+    assert_invalid(data, "unknown visit")
+
+    data = load_example()
+    data["budget"]["cost_items"][0]["booking_id"] = "deleted_booking"
+    assert_invalid(data, "unknown booking")
+
+    data = load_example()
+    data["budget"]["cost_items"][1]["currency"] = "EURO"
+    assert_invalid(data, "three-letter uppercase")
+
+    data = load_example()
+    data["budget"]["cost_items"].append(copy.deepcopy(data["budget"]["cost_items"][0]))
+    assert_invalid(data, "Duplicate cost item ID")
+
+
 def test_save_requires_revision_and_rejects_stale_revision(tmp_path, monkeypatch):
     configure_temp_data(tmp_path, monkeypatch)
     client = TestClient(itinerary_app.app)
@@ -295,6 +367,23 @@ def test_save_requires_revision_and_rejects_stale_revision(tmp_path, monkeypatch
 
     conflict = client.put("/api/itinerary", json={"expected_revision": revision, "itinerary": itinerary})
     assert conflict.status_code == 409
+
+
+def test_budget_data_saves_and_reloads_with_exact_strings(tmp_path, monkeypatch):
+    configure_temp_data(tmp_path, monkeypatch)
+    client = TestClient(itinerary_app.app)
+    loaded = client.get("/api/itinerary").json()
+    itinerary = loaded["itinerary"]
+    item = itinerary["budget"]["cost_items"][1]
+    item["expected"]["unit_amount"] = "180.125"
+    item["payments"].append({"id": "payment_precision", "kind": "payment", "amount": "0.125", "date": "2027-01-16", "note": "Exact test"})
+
+    saved = client.put("/api/itinerary", json={"expected_revision": loaded["revision"], "itinerary": itinerary})
+    assert saved.status_code == 200
+    reloaded = client.get("/api/itinerary").json()["itinerary"]
+    stored = next(item for item in reloaded["budget"]["cost_items"] if item["id"] == "cost_paris_accommodation")
+    assert stored["expected"]["unit_amount"] == "180.125"
+    assert stored["payments"][-1]["amount"] == "0.125"
 
 
 def test_save_creates_exact_backup_and_rotates_after_success(tmp_path, monkeypatch):
@@ -320,7 +409,7 @@ def test_save_creates_exact_backup_and_rotates_after_success(tmp_path, monkeypat
     backups = list(backup_dir.glob("itinerary_*.json"))
     assert len(backups) == 3
     assert json.loads(target.read_text(encoding="utf-8"))["metadata"]["description"] == "Save 4"
-    assert all(json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 5 for path in backups)
+    assert all(json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 6 for path in backups)
 
 
 def test_legacy_save_persists_current_schema_and_keeps_backup(tmp_path, monkeypatch):
@@ -337,7 +426,7 @@ def test_legacy_save_persists_current_schema_and_keeps_backup(tmp_path, monkeypa
 
     assert response.status_code == 200
     saved = json.loads(target.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 5
+    assert saved["schema_version"] == 6
     assert saved["bookings"][0]["legacy"]["positional_values"] == row
     backups = list(backup_dir.glob("itinerary_*.json"))
     assert len(backups) == 1
