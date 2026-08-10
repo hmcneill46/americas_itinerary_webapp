@@ -247,6 +247,7 @@ function switchTab(tab) {
   state.activeTab = tab;
   document.querySelectorAll('.tab-button').forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
   document.querySelectorAll('.view-panel').forEach(panel => panel.classList.toggle('active', panel.id === `view-${tab}`));
+  window.scrollTo(0, 0);
   if (tab === 'day') { renderDayView(); renderEventDetails(); }
   if (tab === 'map') renderMap(false);
   if (tab === 'edit') renderEditView();
@@ -645,7 +646,9 @@ function updateMapDay(dayNumber) {
   renderMapDayCard(day, route);
   state.mapController?.setSelection({ visitId: visit.id, routeId: route?.id || null });
   document.querySelectorAll('.map-route-row').forEach(row => row.classList.toggle('active', row.dataset.visitId === visit.id));
-  document.querySelector('.map-route-row.active')?.scrollIntoView({ block: 'nearest' });
+  if (window.matchMedia('(min-width: 1051px)').matches) {
+    document.querySelector('.map-route-row.active')?.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 function toggleMapExpanded(force = !state.mapExpanded) {

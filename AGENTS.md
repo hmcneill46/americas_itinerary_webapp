@@ -15,7 +15,9 @@ This is a private, self-hosted trip planner. It uses FastAPI, a plain JavaScript
 
 ## Run and test
 
-Create `data/itinerary.json` from the example, install `requirements-dev.txt`, then run `python app.py`. Run all tests with `python -m pytest -q`. Validate a file with `python tools/validate_itinerary.py PATH`.
+Create `data/itinerary.json` from the example, install `requirements-dev.txt`, then run `python app.py`. For local browser work, prefer `python -m uvicorn app:app --host 0.0.0.0 --port 32912 --reload`; that binding is local-development-only, not production deployment guidance. Run all tests with `python -m pytest -q`. Validate a file with `python tools/validate_itinerary.py PATH`.
+
+For meaningful frontend, layout or interaction changes, perform actual screenshot-based visual inspection as well as functional checks. Review both desktop (about `1440 × 900`) and phone portrait (about `390 × 844`; also consider `360 × 800` for dense UI), checking hierarchy, spacing, overflow, dialog fit, touch targets and polish. Fix clear in-scope visual defects before handoff; do not treat DOM assertions alone as UX verification.
 
 ## Non-negotiable data rules
 
