@@ -3,6 +3,7 @@
 const DAY_MS = 86_400_000;
 const MAP_WIDTH = 1100;
 const MAP_HEIGHT = 850;
+const SAFE_COLOUR_RE = /^#[0-9A-Fa-f]{6}$/;
 const MODE_STYLES = {
   'Flight': { colour: '#D1495B', dash: '7 5' },
   'Road / bus': { colour: '#E58C47', dash: '' },
@@ -142,7 +143,10 @@ function eventOverlapsDay(event, dateKey) {
   return parseFloating(event.start) < end && parseFloating(event.end) > start;
 }
 function eventTouchesDate(event, dateKey) { return eventOverlapsDay(event, dateKey); }
-function colourForCategory(category, data = currentData()) { return data?.metadata?.category_colours?.[category] || '#9BA8B1'; }
+function colourForCategory(category, data = currentData()) {
+  const colour = data?.metadata?.category_colours?.[category];
+  return SAFE_COLOUR_RE.test(colour || '') ? colour : '#9BA8B1';
+}
 
 function contrastClass(hex) {
   const clean = String(hex).replace('#', '');
@@ -231,6 +235,9 @@ async function loadItinerary(showToast = false) {
   if (storedToken) el('edit-token').value = storedToken;
   markClean();
   renderEverything();
+  if (payload.migrations?.length) {
+    toast(`Loaded and migrated ${payload.migrations.join(', ')} in memory. Save to persist schema v${payload.itinerary.schema_version}.`, 'info', 7000);
+  }
   if (showToast) toast('Reloaded the saved itinerary.', 'success');
 }
 
@@ -327,7 +334,7 @@ function renderDayView() {
       const selected = event.id === state.selectedEventId;
       const label = width > 4 ? event.title : '';
       const title = `${event.title} · ${humanTime(formatFloating(dayStart + piece.startMinute * 60_000))}–${humanTime(formatFloating(dayStart + piece.endMinute * 60_000))}`;
-      return `<button class="event-piece ${contrastClass(colour)} ${selected ? 'selected' : ''} ${event.locked ? 'locked' : ''}" data-event-id="${escapeHtml(event.id)}" style="left:${left}%;width:${width}%;top:${6 + piece.lane * 28}px;background:${colour}" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
+      return `<button class="event-piece ${contrastClass(colour)} ${selected ? 'selected' : ''} ${event.locked ? 'locked' : ''}" data-event-id="${escapeHtml(event.id)}" style="left:${left}%;width:${width}%;top:${6 + piece.lane * 28}px" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
     }).join('');
     const notes = day.notes ? `<div class="day-notes-text">${escapeHtml(day.notes)}</div>` : '';
     html.push(`<article class="day-row ${compact ? 'compact' : ''} ${day.date === state.selectedDate ? 'target-day' : ''}" data-date="${day.date}">
@@ -340,6 +347,10 @@ function renderDayView() {
     </article>`);
   }
   el('day-list').innerHTML = html.join('');
+  el('day-list').querySelectorAll('.event-piece').forEach(piece => {
+    const event = data.events.find(item => item.id === piece.dataset.eventId);
+    piece.style.backgroundColor = colourForCategory(event?.category, data);
+  });
   el('day-list').querySelectorAll('.event-piece').forEach(piece => piece.addEventListener('click', () => selectEvent(piece.dataset.eventId)));
 }
 
@@ -375,7 +386,7 @@ function renderEventDetails() {
   const spanDays = daysBetween(firstDay, lastDay) + 1;
   const summaries = (event.day_summaries || []).map(summary => `<li>${escapeHtml(summary)}</li>`).join('');
   panel.innerHTML = `<div class="details-card">
-    <span class="details-category ${contrastClass(colourForCategory(event.category, data))}" style="background:${colourForCategory(event.category, data)}">${escapeHtml(event.category)}</span>
+    <span class="details-category ${contrastClass(colourForCategory(event.category, data))}">${escapeHtml(event.category)}</span>
     <h2>${escapeHtml(event.title)}</h2>
     <div class="details-time"><strong>${humanDateTime(event.start)}</strong><span>until ${humanDateTime(event.end)}</span><span>${formatDuration(duration)}${spanDays > 1 ? ` across ${spanDays} calendar days` : ''}</span></div>
     <div class="details-grid">
@@ -390,6 +401,7 @@ function renderEventDetails() {
     ${summaries ? `<div class="details-section"><h3>Daily context</h3><ul>${summaries}</ul></div>` : ''}
     <div class="details-section"><button id="details-edit-event" class="primary-button">Edit this event</button></div>
   </div>`;
+  panel.querySelector('.details-category').style.backgroundColor = colourForCategory(event.category, data);
   el('details-edit-event').addEventListener('click', () => {
     state.editEventId = event.id;
     switchTab('edit');
@@ -1007,7 +1019,8 @@ async function saveDraft() {
       body: JSON.stringify({ expected_revision: state.revision, itinerary: state.draft }),
     });
     state.revision = result.revision;
-    state.saved = deepClone(state.draft);
+    state.draft = deepClone(result.itinerary);
+    state.saved = deepClone(result.itinerary);
     markClean();
     renderEverything();
     toast('Itinerary saved. A server-side backup was also created.', 'success');
@@ -1045,17 +1058,18 @@ async function uploadDraft(file) {
     const uploaded = JSON.parse(await file.text());
     const result = await apiJson('/api/validate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itinerary: uploaded }) });
     if (!result.valid) { showValidationDialog(result); toast('The uploaded file was not applied because validation failed.', 'error'); return; }
-    state.draft = uploaded;
+    state.draft = result.itinerary;
     state.editEventId = null;
-    state.editVisitId = sortedVisits(uploaded)[0]?.id || null;
-    state.editLocationId = Object.keys(uploaded.locations)[0] || null;
-    state.selectedDate = uploaded.metadata.start_date;
-    state.editDayDate = uploaded.metadata.start_date;
+    state.editVisitId = sortedVisits(result.itinerary)[0]?.id || null;
+    state.editLocationId = Object.keys(result.itinerary.locations)[0] || null;
+    state.selectedDate = result.itinerary.metadata.start_date;
+    state.editDayDate = result.itinerary.metadata.start_date;
     state.mapBuiltForSignature = '';
     markDirty(`Uploaded ${file.name}; press Save to write it to the server`);
     renderEverything();
     if (result.warnings.length) showValidationDialog(result);
-    toast('Uploaded file loaded into the draft. The saved file is unchanged.', 'success', 5500);
+    const migrationNote = result.migrations.length ? ` Migrated ${result.migrations.join(', ')}.` : '';
+    toast(`Uploaded file loaded into the draft.${migrationNote} The saved file is unchanged.`, 'success', 6500);
   } catch (error) {
     toast(`Could not upload the file: ${error.message}`, 'error', 6000);
   } finally {

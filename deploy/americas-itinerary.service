@@ -1,5 +1,5 @@
 [Unit]
-Description=Americas itinerary web app
+Description=Private Trip Planner web app
 After=network-online.target tailscaled.service
 Wants=network-online.target
 
@@ -8,14 +8,18 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=/home/pi/americas_itinerary_webapp
-Environment=ITINERARY_HOST=0.0.0.0
 Environment=ITINERARY_PORT=8765
+Environment=PYTHONDONTWRITEBYTECODE=1
 # Optional: Environment=ITINERARY_EDIT_TOKEN=replace-with-a-long-secret
-ExecStart=/home/pi/americas_itinerary_webapp/.venv/bin/python /home/pi/americas_itinerary_webapp/app.py
+ExecStart=/home/pi/americas_itinerary_webapp/run_tailscale.sh
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/pi/americas_itinerary_webapp/data
 
 [Install]
 WantedBy=multi-user.target

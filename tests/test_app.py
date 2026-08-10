@@ -1,24 +1,55 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 import app as itinerary_app
+from trip_schema import CURRENT_SCHEMA_VERSION, migrate_to_current, validate_current_itinerary
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "data" / "itinerary.example.json"
 
 
-def configure_temp_data(tmp_path, monkeypatch):
+def load_example() -> dict:
+    return json.loads(SOURCE.read_text(encoding="utf-8"))
+
+
+def legacy_v4_itinerary() -> tuple[dict, list]:
+    data = load_example()
+    row = [
+        {"__date__": "2027-04-09"},
+        "Train",
+        "London to Paris",
+        "Morning",
+        "About 2h 30m",
+        {"__date__": "2027-03-01"},
+        True,
+        "Flexible ticket",
+        "High",
+        "Keep a copy offline.",
+        "LEGACY-DEMO-001",
+        {"future_column": "must survive"},
+    ]
+    data["schema_version"] = 4
+    data["bookings"] = [row]
+    data["legacy_root_extension"] = {"keep": True}
+    return data, row
+
+
+def configure_temp_data(tmp_path, monkeypatch, source_data: dict | None = None):
     data_dir = tmp_path / "data"
     backup_dir = data_dir / "backups"
     data_dir.mkdir()
     backup_dir.mkdir()
     target = data_dir / "itinerary.json"
-    target.write_bytes(SOURCE.read_bytes())
+    if source_data is None:
+        target.write_bytes(SOURCE.read_bytes())
+    else:
+        target.write_text(json.dumps(source_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     monkeypatch.setattr(itinerary_app, "DATA_DIR", data_dir)
     monkeypatch.setattr(itinerary_app, "BACKUP_DIR", backup_dir)
     monkeypatch.setattr(itinerary_app, "DATA_FILE", target)
@@ -26,60 +57,262 @@ def configure_temp_data(tmp_path, monkeypatch):
     return target, backup_dir
 
 
-def test_current_file_validates():
-    data = json.loads(SOURCE.read_text(encoding="utf-8"))
+def assert_invalid(data: dict, text: str) -> None:
     result = itinerary_app.validate_itinerary(data)
-    assert result["errors"] == []
-    assert result["warnings"] == []
-    assert len(data["days"]) == 3
-    assert any(event["start"] == "2027-01-02T09:00" and event["end"] == "2027-01-02T12:00" for event in data["events"])
+    assert result["errors"], result
+    assert any(text in error for error in result["errors"]), result["errors"]
+
+
+def test_example_is_canonical_current_schema_and_validates():
+    data = load_example()
+    result = validate_current_itinerary(data)
+    assert data["schema_version"] == CURRENT_SCHEMA_VERSION
+    assert result == {"errors": [], "warnings": []}
+    assert len(data["days"]) == 5
+    assert {booking["type"] for booking in data["bookings"]} == {"Transport", "Accommodation", "Activity"}
+    assert any(event["start"] == "2027-04-11T15:00" and event["end"] == "2027-04-12T09:00" for event in data["events"])
+
+
+def test_v4_booking_migration_is_deterministic_lossless_and_idempotent():
+    legacy, row = legacy_v4_itinerary()
+    untouched = copy.deepcopy(legacy)
+
+    first, applied, source_version = migrate_to_current(legacy)
+    second, second_applied, _ = migrate_to_current(first)
+    repeated, _, _ = migrate_to_current(legacy)
+
+    assert legacy == untouched
+    assert source_version == 4
+    assert applied == ["v4->v5"]
+    assert second_applied == []
+    assert first == second == repeated
+    assert first["schema_version"] == 5
+    assert first["legacy_root_extension"] == {"keep": True}
+    booking = first["bookings"][0]
+    assert booking["id"].startswith("booking_001_")
+    assert booking["title"] == "London to Paris"
+    assert booking["type"] == "Train"
+    assert booking["status"] == "booked"
+    assert booking["date"] == "2027-04-09"
+    assert booking["booking_deadline"] == "2027-03-01"
+    assert booking["legacy"]["positional_values"] == row
+    assert validate_current_itinerary(first)["errors"] == []
+
+
+def test_validate_endpoint_returns_migrated_document():
+    legacy, _ = legacy_v4_itinerary()
+    response = TestClient(itinerary_app.app).post("/api/validate", json={"itinerary": legacy})
+    body = response.json()
+    assert response.status_code == 200
+    assert body["valid"] is True
+    assert body["migrations"] == ["v4->v5"]
+    assert body["itinerary"]["schema_version"] == 5
+    assert isinstance(body["itinerary"]["bookings"][0], dict)
+
+
+def test_get_migrates_legacy_file_in_memory_without_rewriting(tmp_path, monkeypatch):
+    legacy, _ = legacy_v4_itinerary()
+    target, _ = configure_temp_data(tmp_path, monkeypatch, legacy)
+    original_bytes = target.read_bytes()
+
+    response = TestClient(itinerary_app.app).get("/api/itinerary")
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["migrations"] == ["v4->v5"]
+    assert body["itinerary"]["schema_version"] == 5
+    assert target.read_bytes() == original_bytes
+
+
+def test_malformed_metadata_and_strict_booleans_are_rejected():
+    data = load_example()
+    data["metadata"] = None
+    assert_invalid(data, "metadata")
+
+    data = load_example()
+    data["days"][0]["is_physical_location_day"] = "true"
+    assert_invalid(data, "is_physical_location_day")
+
+
+def test_invalid_coordinates_and_map_bounds_are_rejected():
+    data = load_example()
+    data["locations"]["paris"]["latitude"] = 95.0
+    assert_invalid(data, "latitude")
+
+    data = load_example()
+    data["metadata"]["map_bounds"]["min_lon"] = 8.0
+    data["metadata"]["map_bounds"]["max_lon"] = 6.0
+    assert_invalid(data, "min_lon must be less than max_lon")
+
+    data = load_example()
+    data["metadata"]["map_bounds"]["max_lat"] = 51.0
+    assert_invalid(data, "lies outside metadata.map_bounds")
+
+    data = load_example()
+    data["locations"]["paris"]["longitude"] = float("nan")
+    assert_invalid(data, "standard JSON values")
+
+
+def test_broken_references_are_rejected():
+    data = load_example()
+    data["events"][0]["visit_id"] = "missing_visit"
+    assert_invalid(data, "references unknown visit")
+
+    data = load_example()
+    data["bookings"][0]["event_id"] = "missing_event"
+    assert_invalid(data, "references unknown event")
+
+    data = load_example()
+    data["metadata"]["home_location_id"] = "missing_home"
+    assert_invalid(data, "home_location_id")
+
+    data = load_example()
+    data["events"][0]["category"] = "Unknown category"
+    assert_invalid(data, "references unknown category")
+
+    data = load_example()
+    data["events"][1]["id"] = data["events"][0]["id"]
+    assert_invalid(data, "Duplicate event ID")
+
+
+def test_malformed_and_zoned_timestamps_are_rejected():
+    data = load_example()
+    data["events"][0]["start"] = "2027-02-30T09:00"
+    assert_invalid(data, "valid calendar date-time")
+
+    data = load_example()
+    data["events"][0]["start"] = "2027-04-08T09:00Z"
+    assert_invalid(data, "floating local timestamp")
+
+    data = load_example()
+    data["events"][0]["end"] = data["events"][0]["start"]
+    assert_invalid(data, "end must be later")
 
 
 def test_multiday_exact_minute_event_is_valid():
-    data = json.loads(SOURCE.read_text(encoding="utf-8"))
-    template = dict(data["events"][0])
-    template.update({
-        "id": "evt_test_60_hour_bus",
-        "title": "Example overnight train",
-        "category": "Travel",
-        "start": "2027-01-02T22:30",
-        "end": "2027-01-03T06:15",
-        "visit_id": data["days"][1]["visit_id"],
-        "location_id": data["days"][1]["location_id"],
-        "from_location_id": data["days"][0]["location_id"],
-        "to_location_id": data["days"][1]["location_id"],
-        "transport_mode": "Train",
-    })
+    data = load_example()
+    template = copy.deepcopy(data["events"][-1])
+    template.update(
+        {
+            "id": "evt_test_overnight_train",
+            "title": "Example overnight train",
+            "category": "Travel",
+            "start": "2027-04-11T22:30",
+            "end": "2027-04-12T06:15",
+            "visit_id": "amsterdam_01",
+            "location_id": "amsterdam",
+            "from_location_id": "paris",
+            "to_location_id": "amsterdam",
+            "transport_mode": "Train",
+            "source_dates": ["2027-04-11", "2027-04-12"],
+        }
+    )
     data["events"].append(template)
-    result = itinerary_app.validate_itinerary(data)
-    assert result["errors"] == []
+    assert itinerary_app.validate_itinerary(data)["errors"] == []
 
 
-def test_save_revision_conflict_and_backup(tmp_path, monkeypatch):
-    target, backup_dir = configure_temp_data(tmp_path, monkeypatch)
+def test_unsafe_category_colours_are_rejected_and_not_interpolated_into_html():
+    data = load_example()
+    data["metadata"]["category_colours"]["Activity"] = "#fff;background:url(javascript:alert(1))"
+    assert_invalid(data, "six-digit hex")
+
+    frontend = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    assert "style.backgroundColor = colourForCategory" in frontend
+    assert "background:${colour}" not in frontend
+    assert "style=\"background:${colourForCategory" not in frontend
+
+
+def test_structured_booking_fields_and_references_are_validated():
+    data = load_example()
+    assert itinerary_app.validate_itinerary(data)["errors"] == []
+
+    data = load_example()
+    data["bookings"][0]["status"] = "maybe"
+    assert_invalid(data, "bookings.0.status")
+
+    data = load_example()
+    data["bookings"][0]["provider"] = None
+    assert_invalid(data, "bookings.0.provider")
+
+    data = load_example()
+    data["bookings"][0]["url"] = "javascript:alert(1)"
+    assert_invalid(data, "absolute http(s) URL")
+
+
+def test_save_requires_revision_and_rejects_stale_revision(tmp_path, monkeypatch):
+    configure_temp_data(tmp_path, monkeypatch)
     client = TestClient(itinerary_app.app)
+    itinerary = load_example()
+
+    missing = client.put("/api/itinerary", json={"itinerary": itinerary})
+    assert missing.status_code == 428
 
     loaded = client.get("/api/itinerary").json()
     revision = loaded["revision"]
-    itinerary = loaded["itinerary"]
     itinerary["metadata"]["description"] = "Changed in test"
-
     saved = client.put("/api/itinerary", json={"expected_revision": revision, "itinerary": itinerary})
     assert saved.status_code == 200
-    new_revision = saved.json()["revision"]
-    assert new_revision != revision
-    assert json.loads(target.read_text(encoding="utf-8"))["metadata"]["description"] == "Changed in test"
-    assert len(list(backup_dir.glob("itinerary_*.json"))) == 1
+    assert saved.json()["revision"] != revision
 
     conflict = client.put("/api/itinerary", json={"expected_revision": revision, "itinerary": itinerary})
     assert conflict.status_code == 409
 
 
-def test_invalid_upload_rejected():
+def test_save_creates_exact_backup_and_rotates_after_success(tmp_path, monkeypatch):
+    target, backup_dir = configure_temp_data(tmp_path, monkeypatch)
+    monkeypatch.setattr(itinerary_app, "MAX_BACKUPS", 3)
     client = TestClient(itinerary_app.app)
-    data = json.loads(SOURCE.read_text(encoding="utf-8"))
-    data["events"][0]["end"] = data["events"][0]["start"]
-    response = client.post("/api/validate", json={"itinerary": data})
-    body = response.json()
-    assert body["valid"] is False
-    assert any("end must be later" in error for error in body["errors"])
+    previous_bytes = target.read_bytes()
+
+    for index in range(5):
+        loaded = client.get("/api/itinerary").json()
+        itinerary = loaded["itinerary"]
+        itinerary["metadata"]["description"] = f"Save {index}"
+        response = client.put(
+            "/api/itinerary",
+            json={"expected_revision": loaded["revision"], "itinerary": itinerary},
+        )
+        assert response.status_code == 200
+        backups = list(backup_dir.glob("itinerary_*.json"))
+        if index == 0:
+            assert len(backups) == 1
+            assert backups[0].read_bytes() == previous_bytes
+
+    backups = list(backup_dir.glob("itinerary_*.json"))
+    assert len(backups) == 3
+    assert json.loads(target.read_text(encoding="utf-8"))["metadata"]["description"] == "Save 4"
+    assert all(json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 5 for path in backups)
+
+
+def test_legacy_save_persists_current_schema_and_keeps_backup(tmp_path, monkeypatch):
+    legacy, row = legacy_v4_itinerary()
+    target, backup_dir = configure_temp_data(tmp_path, monkeypatch, legacy)
+    original_bytes = target.read_bytes()
+    client = TestClient(itinerary_app.app)
+    loaded = client.get("/api/itinerary").json()
+
+    response = client.put(
+        "/api/itinerary",
+        json={"expected_revision": loaded["revision"], "itinerary": loaded["itinerary"]},
+    )
+
+    assert response.status_code == 200
+    saved = json.loads(target.read_text(encoding="utf-8"))
+    assert saved["schema_version"] == 5
+    assert saved["bookings"][0]["legacy"]["positional_values"] == row
+    backups = list(backup_dir.glob("itinerary_*.json"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original_bytes
+
+
+def test_invalid_migration_fails_safely():
+    data = load_example()
+    data["schema_version"] = 4
+    data["bookings"] = ["not a booking row"]
+    result = itinerary_app.validate_itinerary(data)
+    assert result["itinerary"] is None
+    assert any("bookings[0]" in error for error in result["errors"])
+
+    data = load_example()
+    data["schema_version"] = 999
+    assert_invalid(data, "newer than this application supports")

@@ -6,12 +6,17 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from trip_schema import migrate_v4_to_v5  # noqa: E402
+
 SOURCE_ROOT = Path('/mnt/data/webapp_project')
 SOURCE_PROJECT = SOURCE_ROOT / 'itinerary_project.json'
 SOURCE_ROUTE = SOURCE_ROOT / 'route_manifest.json'
@@ -265,7 +270,7 @@ def main() -> None:
             'locked': item['locked'],
         })
 
-    output = {
+    legacy_output = {
         'schema_version': 4,
         'metadata': {
             'title': source['meta']['title'],
@@ -288,6 +293,7 @@ def main() -> None:
         'events': events,
         'bookings': source['bookings'],
     }
+    output = migrate_v4_to_v5(legacy_output)
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding='utf-8')

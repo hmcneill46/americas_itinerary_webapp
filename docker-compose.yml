@@ -3,10 +3,14 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8765:8765"
+      - "${ITINERARY_BIND_ADDRESS:-127.0.0.1}:8765:8765"
     volumes:
       - ./data:/app/data
     environment:
       ITINERARY_HOST: 0.0.0.0
       ITINERARY_PORT: 8765
-      # ITINERARY_EDIT_TOKEN: replace-with-a-long-secret
+      ITINERARY_EDIT_TOKEN: "${ITINERARY_EDIT_TOKEN:-}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

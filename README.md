@@ -1,244 +1,110 @@
-# Americas Itinerary — self-hosted web app
+# Trip Planner — self-hosted web app
 
-A local-first itinerary application for the 182-day Americas trip from **3 January to 3 July 2027**.
+Trip Planner is a local-first itinerary application for trips anywhere in the world. It keeps one human-readable JSON document and provides connected day-bar, route-map and editing views without a database or heavy frontend framework.
 
-It provides three connected views from one JSON file:
-
-1. **Day bars** — exact-time, interactive 24-hour bars for every day.
-2. **Map** — ordered route, stay lengths, travel modes and estimated transfer times.
-3. **Edit** — staged edits with validation, Save/Cancel, route reflow, and JSON import/export.
-
-The canonical data file is:
-
-```text
-data/itinerary.json
-```
-
-For a fresh public checkout, create it from the safe sample file:
+The canonical private file is `data/itinerary.json`. For a fresh checkout:
 
 ```bash
 cp data/itinerary.example.json data/itinerary.json
 ```
 
-The real `data/itinerary.json` is ignored by Git so private trip details, booking notes and local edits stay on your machine.
+The real file, backups and exports are ignored by Git. Edits stay in a browser draft until **Save to itinerary file** is pressed. Saves require the revision that was loaded, validate the complete document, preserve the previous bytes in `data/backups/`, and atomically replace the file. The latest 50 backups are retained.
 
-The server dynamically reads and writes that file. The website never writes changes merely because a form field was edited: all edits remain in a browser draft until **Save to itinerary file** is pressed.
+## Run locally
 
-## What is different from the spreadsheet model
-
-Events now contain exact local start and end timestamps:
-
-```json
-{
-  "id": "evt_example",
-  "title": "Bus to the next city",
-  "category": "Travel",
-  "start": "2027-02-01T10:34",
-  "end": "2027-02-03T22:34"
-}
-```
-
-An event may be a few minutes or several days long. The day view automatically clips the same event across each affected day. Clicking any piece highlights every piece belonging to that event.
-
-Times use the **floating local itinerary clock**. They do not contain UTC offsets, so `10:34` means 10:34 at that point in the itinerary. Optional IANA timezones are retained on locations for reference.
-
-## Run locally on a laptop
-
-### macOS or Linux
+macOS/Linux:
 
 ```bash
-cd americas_itinerary_webapp
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+. .venv/bin/activate
+python -m pip install -r requirements-dev.txt
 python app.py
 ```
 
-Open:
+Windows PowerShell:
 
-```text
-http://127.0.0.1:8765
-```
-
-The included `install.sh` and `run_local.sh` perform the same steps.
-
-### Windows
-
-```bat
+```powershell
 py -m venv .venv
-.venv\Scripts\activate
-py -m pip install -r requirements.txt
-py app.py
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe app.py
 ```
 
-You can also double-click `run_local.bat` after installing the dependencies.
+Open `http://127.0.0.1:8765`. The `install.sh`, `run_local.sh`, and `run_local.bat` helpers use the same loopback-only default.
 
-## Raspberry Pi and Tailscale
-
-The safest simple arrangement is:
-
-1. Keep the site unavailable to the public internet.
-2. Install Tailscale on the Pi and your phone/laptop.
-3. Bind the app to the Pi's Tailscale address.
-
-Run:
+Run checks with:
 
 ```bash
+python -m pytest -q
+python tools/validate_itinerary.py data/itinerary.example.json
+```
+
+## JSON portability and time model
+
+The documented current format is schema v5: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable IDs, named booking objects, typed fields and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
+
+Events use floating local wall-clock timestamps. `2027-04-09T08:30` means 08:30 at that point in the trip; it has no `Z` or UTC offset and is not converted through the browser timezone. Events can last exact minutes or span several days.
+
+Download/upload supports an AI-assisted workflow: download JSON, edit it with a person or AI, upload it into a browser draft, review validation, then explicitly save. Unknown extension fields are preserved. Keep a backup and never bypass validation when generating files.
+
+## Views and editing
+
+- **Day bars** render exact-minute event segments, overlaps, multi-day clipping, search and category filters.
+- **Map** shows the ordered route, travel mode, estimated transfer time and per-day progress using the existing lightweight offline SVG implementation.
+- **Edit** supports events, locations, visit duration/order, day information and route date reflow.
+
+Route reflow shifts a complete visit, its days and its events while retaining floating-local times. The current offline country-outline asset is limited and is intentionally not the planned future interactive world map; routes and coordinates remain globally valid even where an outline is unavailable.
+
+## Private deployment and Tailscale
+
+There is no user-account system and no read authentication. Anyone who can reach the HTTP service can read and download the itinerary. The optional `ITINERARY_EDIT_TOKEN` protects writes only. The intended security boundary is a private host plus Tailscale access control.
+
+Safe rules:
+
+1. Never port-forward this service or publish it through a public proxy/tunnel.
+2. Bind to `127.0.0.1` for one-machine use or directly to the host's Tailscale IP.
+3. Do not bind to `0.0.0.0` on the host; that commonly exposes the app to the whole LAN.
+4. Protect the host account, Tailscale account, `data/` directory and backups independently.
+
+For direct tailnet access on Linux:
+
+```bash
+export ITINERARY_EDIT_TOKEN='a-long-random-secret'  # optional write protection
 ./run_tailscale.sh
 ```
 
-The script uses `tailscale ip -4` when available. Visit:
+The script binds only to `tailscale ip -4` and fails closed if no Tailscale address is available. Visit `http://TAILSCALE_IP:8765` from an authorised tailnet device.
 
-```text
-http://PI_TAILSCALE_IP:8765
-```
+The template `deploy/americas-itinerary.service` retains its historical filename so existing installs do not break, but runs the generic app through the fail-closed Tailscale script. Adjust `User`, `Group`, and `/home/pi/americas_itinerary_webapp` paths before installing it.
 
-There is no built-in user account system. Tailscale supplies the network access control. Do **not** port-forward this application to the public internet.
+## Docker
 
-### Optional write token
-
-For an extra layer around edits, set an environment variable before starting the app:
-
-```bash
-export ITINERARY_EDIT_TOKEN='a-long-random-secret'
-./run_tailscale.sh
-```
-
-The website will reveal an Edit token field. Reading the itinerary remains available, but saving requires the token.
-
-## Install as a Raspberry Pi service
-
-A template is included at:
-
-```text
-deploy/americas-itinerary.service
-```
-
-Adjust the user and paths, then:
-
-```bash
-sudo cp deploy/americas-itinerary.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now americas-itinerary
-sudo systemctl status americas-itinerary
-```
-
-## Docker option
+First create `data/itinerary.json`, then:
 
 ```bash
 docker compose up -d --build
 ```
 
-The `data` directory is mounted as persistent storage. Back it up independently.
-
-## Day bars
-
-- All daily bars represent 00:00–24:00 with exact minute positioning.
-- Events can overlap; overlapping items use separate lanes.
-- Search and category filters operate without changing data.
-- Selecting an event shows:
-  - exact start and end date/time;
-  - weekdays;
-  - total duration;
-  - every affected calendar day;
-  - location and visit;
-  - transport route/mode;
-  - confidence and planning notes;
-  - daily context retained from the spreadsheet.
-
-## Map
-
-- Nodes are numbered in route order.
-- Node size reflects the number of days at a stop.
-- Line thickness reflects estimated transfer time.
-- Line colour/style reflects travel mode.
-- Previous/next buttons step exactly one day.
-- Play animates the trip.
-- Mouse wheel zooms and drag pans.
-- Markers are inversely scaled during zoom, so they remain usable instead of becoming enormous and overlapping.
-
-## Editing safely
-
-### Events
-
-The Events editor supports exact minute input through `datetime-local` controls. You can add, duplicate, delete and edit events, including multi-day travel.
-
-### Route blocks
-
-Move a stop up or down, then press **Reflow dates**. This shifts the complete visit block, all its days and all its events while preserving their internal timings.
-
-You can also:
-
-- change a visit location;
-- update arrival mode and estimated hours;
-- extend or shorten a visit by one day;
-- edit every day's base, country, summary, notes and confidence.
-
-### Locations
-
-Locations contain name, country, coordinates, timezone and notes. A location cannot be deleted while it is referenced.
-
-### Save and Cancel
-
-- **Apply to draft** changes only the in-browser draft.
-- **Cancel all changes** restores the last saved JSON.
-- **Save to itinerary file** validates and atomically replaces `data/itinerary.json`.
-- The server rejects stale saves when another browser changed the file first.
-
-Every successful save creates a timestamped backup in:
-
-```text
-data/backups/
-```
-
-The latest 50 automatic backups are retained.
-
-## Download and upload
-
-The Edit toolbar includes:
-
-- **Download saved JSON** — the exact server file currently on disk.
-- **Download draft JSON** — includes unsaved edits for inspection or transfer.
-- **Upload JSON** — validates the file and loads it into the draft only. It is not written to disk until Save is pressed.
-
-## Validation
-
-The server checks:
-
-- schema version;
-- continuous day dates and day numbers;
-- visit and location references;
-- coordinates;
-- unique IDs and route order;
-- visit date ranges;
-- valid exact local timestamps;
-- event end later than start;
-- multi-day events within the itinerary date range;
-- allowed confidence and transport values;
-- JSON serialisability.
-
-Run the tests with:
+Compose publishes to host loopback by default. For direct Tailscale binding, set the host address for that invocation:
 
 ```bash
-pytest -q
+ITINERARY_BIND_ADDRESS="$(tailscale ip -4)" docker compose up -d --build
 ```
+
+Inside the container the process listens on `0.0.0.0`; Docker publishes it only on the explicit host address. `.dockerignore` excludes live itineraries, backups, exports, secrets and development state, and the Dockerfile copies only runtime source plus the public example. `./data` is mounted for persistence and should be backed up separately.
 
 ## Project layout
 
 ```text
-app.py                         FastAPI server, validation, atomic saves and backups
-static/index.html              Website structure
-static/styles.css              Responsive styling
-static/app.js                  Day bars, map and editor logic
-static/americas_basemap.geojson Offline country outlines
-data/itinerary.json            Canonical itinerary data
-data/itinerary.example.json    Public-safe sample data for new clones
-data/backups/                  Automatic save backups
-exports/                       Existing spreadsheet and screenshots
-tools/migrate_existing_itinerary.py  Recreates schema v4 from the previous project
- tests/                        API and validation tests
+app.py                         FastAPI API, revisions, atomic saves and backups
+trip_schema.py                 Schema v5 models, validation and migrations
+static/                        Plain-JavaScript UI, CSS and current SVG map asset
+data/itinerary.example.json    Canonical public demo data
+data/itinerary.json            Private live itinerary (ignored)
+data/backups/                  Private automatic backups (ignored)
+docs/itinerary-schema.md       Human- and AI-oriented JSON specification
+tests/                         Validation, migration and persistence tests
+tools/validate_itinerary.py    Command-line validator
+tools/migrate_existing_itinerary.py  Historical spreadsheet conversion utility
 ```
 
-## Existing spreadsheet
-
-The last compiled spreadsheet remains in `exports/` for comparison and offline reference. All its daily summaries, notes, confidence values, locations and timeline segments were migrated into `data/itinerary.json`.
+See [AGENTS.md](AGENTS.md) for project constraints future coding sessions must preserve.

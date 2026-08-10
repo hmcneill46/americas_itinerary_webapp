@@ -1,218 +1,373 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "metadata": {
-    "title": "Example Trip Itinerary",
-    "description": "Small public-safe sample itinerary for local development.",
-    "start_date": "2027-01-01",
-    "end_date": "2027-01-03",
-    "home_location_id": "home",
+    "title": "European Rail Weekend",
+    "description": "Public demo data showing a short multi-country trip with local times, route changes and bookings.",
+    "start_date": "2027-04-08",
+    "end_date": "2027-04-12",
+    "home_location_id": "london",
     "time_model": "floating_local",
-    "time_model_note": "Event timestamps are local itinerary clock times without UTC offsets.",
+    "time_model_note": "Event timestamps are local wall-clock times at the relevant location and never include UTC offsets.",
+    "default_currency": "EUR",
     "category_colours": {
       "Sleep": "#294C60",
       "Meal": "#F4D6A0",
       "Activity": "#7FB77E",
-      "Hike": "#4FA3A5",
       "Travel": "#E58C47",
-      "Rest": "#C9CED6",
-      "Admin": "#E8C547",
-      "Evening": "#A98CC2",
-      "Tour": "#5D9CEC"
+      "Accommodation": "#6C63A8",
+      "Admin": "#E8C547"
     },
     "map_bounds": {
-      "min_lon": -10,
-      "max_lon": 5,
-      "min_lat": 45,
-      "max_lat": 60
+      "min_lon": -1.5,
+      "max_lon": 6.0,
+      "min_lat": 48.0,
+      "max_lat": 53.0
     },
     "created_from": "data/itinerary.example.json"
   },
   "locations": {
-    "home": {
-      "id": "home",
-      "name": "Home",
-      "country": "Exampleland",
-      "latitude": 51.5,
-      "longitude": -0.12,
+    "london": {
+      "id": "london",
+      "name": "London",
+      "country": "United Kingdom",
+      "latitude": 51.5074,
+      "longitude": -0.1278,
       "timezone": "Europe/London",
-      "notes": ""
+      "notes": "Example home and departure point."
     },
-    "sample_city": {
-      "id": "sample_city",
-      "name": "Sample City",
-      "country": "Exampleland",
-      "latitude": 48.85,
-      "longitude": 2.35,
+    "paris": {
+      "id": "paris",
+      "name": "Paris",
+      "country": "France",
+      "latitude": 48.8566,
+      "longitude": 2.3522,
       "timezone": "Europe/Paris",
-      "notes": ""
+      "notes": "First overnight stop."
+    },
+    "amsterdam": {
+      "id": "amsterdam",
+      "name": "Amsterdam",
+      "country": "Netherlands",
+      "latitude": 52.3676,
+      "longitude": 4.9041,
+      "timezone": "Europe/Amsterdam",
+      "notes": "Second overnight stop."
     }
   },
   "visits": [
     {
-      "id": "home__01",
+      "id": "london_01",
       "order": 1,
-      "location_id": "home",
-      "start_date": "2027-01-01",
-      "end_date": "2027-01-01",
-      "stay_start_date": "2027-01-01",
-      "stay_end_date": "2027-01-01",
+      "location_id": "london",
+      "start_date": "2027-04-08",
+      "end_date": "2027-04-08",
+      "stay_start_date": "2027-04-08",
+      "stay_end_date": "2027-04-08",
       "arrival_mode": "",
       "arrival_hours_estimate": 0,
-      "arrival_summary": "Start at home",
-      "notes": ""
+      "arrival_summary": "Prepare at home",
+      "notes": "A preparation day keeps the example route self-contained."
     },
     {
-      "id": "sample_city__01",
+      "id": "paris_01",
       "order": 2,
-      "location_id": "sample_city",
-      "start_date": "2027-01-02",
-      "end_date": "2027-01-03",
-      "stay_start_date": "2027-01-02",
-      "stay_end_date": "2027-01-03",
+      "location_id": "paris",
+      "start_date": "2027-04-09",
+      "end_date": "2027-04-10",
+      "stay_start_date": "2027-04-09",
+      "stay_end_date": "2027-04-10",
       "arrival_mode": "Train",
-      "arrival_hours_estimate": 3,
-      "arrival_summary": "Travel to Sample City",
-      "notes": ""
+      "arrival_hours_estimate": 2.5,
+      "arrival_summary": "Morning train from London",
+      "notes": "Times are illustrative rather than a live timetable."
+    },
+    {
+      "id": "amsterdam_01",
+      "order": 3,
+      "location_id": "amsterdam",
+      "start_date": "2027-04-11",
+      "end_date": "2027-04-12",
+      "stay_start_date": "2027-04-11",
+      "stay_end_date": "2027-04-12",
+      "arrival_mode": "Train",
+      "arrival_hours_estimate": 3.5,
+      "arrival_summary": "Direct daytime train from Paris",
+      "notes": "The final day intentionally remains at the last location."
     }
   ],
   "days": [
     {
-      "date": "2027-01-01",
+      "date": "2027-04-08",
       "day_number": 1,
-      "visit_id": "home__01",
-      "location_id": "home",
-      "country": "Exampleland",
-      "base": "Home",
-      "summary": "Pack and prepare for the sample trip.",
+      "visit_id": "london_01",
+      "location_id": "london",
+      "country": "United Kingdom",
+      "base": "London",
+      "summary": "Pack, check documents and prepare for the rail trip.",
       "confidence": "High",
-      "notes": ""
+      "notes": "Keep tickets available offline.",
+      "is_physical_location_day": true
     },
     {
-      "date": "2027-01-02",
+      "date": "2027-04-09",
       "day_number": 2,
-      "visit_id": "sample_city__01",
-      "location_id": "sample_city",
-      "country": "Exampleland",
-      "base": "Sample City",
-      "summary": "Travel to Sample City and take an evening walk.",
-      "confidence": "Medium",
-      "notes": ""
+      "visit_id": "paris_01",
+      "location_id": "paris",
+      "country": "France",
+      "base": "Paris",
+      "summary": "Travel to Paris, check in and explore the neighbourhood.",
+      "confidence": "High",
+      "notes": "Allow time for departure formalities.",
+      "is_physical_location_day": true
     },
     {
-      "date": "2027-01-03",
+      "date": "2027-04-10",
       "day_number": 3,
-      "visit_id": "sample_city__01",
-      "location_id": "sample_city",
-      "country": "Exampleland",
-      "base": "Sample City",
-      "summary": "Explore a sample museum and park.",
+      "visit_id": "paris_01",
+      "location_id": "paris",
+      "country": "France",
+      "base": "Paris",
+      "summary": "Museum visit followed by a flexible afternoon walk.",
       "confidence": "Medium",
-      "notes": ""
+      "notes": "The afternoon activity can move if weather changes.",
+      "is_physical_location_day": true
+    },
+    {
+      "date": "2027-04-11",
+      "day_number": 4,
+      "visit_id": "amsterdam_01",
+      "location_id": "amsterdam",
+      "country": "Netherlands",
+      "base": "Amsterdam",
+      "summary": "Travel to Amsterdam and settle into the accommodation.",
+      "confidence": "High",
+      "notes": "Lunch is left flexible around the train journey.",
+      "is_physical_location_day": true
+    },
+    {
+      "date": "2027-04-12",
+      "day_number": 5,
+      "visit_id": "amsterdam_01",
+      "location_id": "amsterdam",
+      "country": "Netherlands",
+      "base": "Amsterdam",
+      "summary": "Canal-side walk and a reserved afternoon activity.",
+      "confidence": "Medium",
+      "notes": "This is intentionally a lighter final day.",
+      "is_physical_location_day": true
     }
   ],
   "events": [
     {
-      "id": "evt_example_sleep",
-      "title": "Sleep",
-      "category": "Sleep",
-      "start": "2027-01-01T00:00",
-      "end": "2027-01-01T08:00",
-      "visit_id": "home__01",
-      "location_id": "home",
+      "id": "evt_documents",
+      "title": "Document and ticket check",
+      "category": "Admin",
+      "start": "2027-04-08T18:30",
+      "end": "2027-04-08T19:15",
+      "visit_id": "london_01",
+      "location_id": "london",
       "from_location_id": "",
       "to_location_id": "",
       "transport_mode": "",
       "confidence": "High",
-      "notes": "",
+      "notes": "Download tickets and accommodation details.",
       "day_summaries": [
-        "Pack and prepare for the sample trip."
+        "Pack, check documents and prepare for the rail trip."
       ],
       "source_dates": [
-        "2027-01-01"
+        "2027-04-08"
       ],
       "locked": false
     },
     {
-      "id": "evt_example_train",
-      "title": "Train to Sample City",
+      "id": "evt_train_london_paris",
+      "title": "Train to Paris",
       "category": "Travel",
-      "start": "2027-01-02T09:00",
-      "end": "2027-01-02T12:00",
-      "visit_id": "sample_city__01",
-      "location_id": "sample_city",
-      "from_location_id": "home",
-      "to_location_id": "sample_city",
+      "start": "2027-04-09T08:30",
+      "end": "2027-04-09T11:00",
+      "visit_id": "paris_01",
+      "location_id": "paris",
+      "from_location_id": "london",
+      "to_location_id": "paris",
       "transport_mode": "Train",
-      "confidence": "Medium",
-      "notes": "",
+      "confidence": "High",
+      "notes": "Illustrative local departure and arrival times.",
       "day_summaries": [
-        "Travel to Sample City and take an evening walk."
+        "Travel to Paris, check in and explore the neighbourhood."
       ],
       "source_dates": [
-        "2027-01-02"
+        "2027-04-09"
       ],
-      "locked": false
+      "locked": true
     },
     {
-      "id": "evt_example_walk",
-      "title": "Evening walk",
+      "id": "evt_paris_checkin",
+      "title": "Paris accommodation check-in",
+      "category": "Accommodation",
+      "start": "2027-04-09T15:00",
+      "end": "2027-04-09T15:30",
+      "visit_id": "paris_01",
+      "location_id": "paris",
+      "from_location_id": "",
+      "to_location_id": "",
+      "transport_mode": "",
+      "confidence": "High",
+      "notes": "Leave luggage earlier if the room is not ready.",
+      "day_summaries": [
+        "Travel to Paris, check in and explore the neighbourhood."
+      ],
+      "source_dates": [
+        "2027-04-09"
+      ],
+      "locked": true
+    },
+    {
+      "id": "evt_paris_museum",
+      "title": "Museum visit",
       "category": "Activity",
-      "start": "2027-01-02T18:00",
-      "end": "2027-01-02T20:00",
-      "visit_id": "sample_city__01",
-      "location_id": "sample_city",
+      "start": "2027-04-10T10:00",
+      "end": "2027-04-10T12:30",
+      "visit_id": "paris_01",
+      "location_id": "paris",
       "from_location_id": "",
       "to_location_id": "",
       "transport_mode": "",
       "confidence": "Medium",
-      "notes": "",
+      "notes": "A timed activity used to demonstrate booking references.",
       "day_summaries": [
-        "Travel to Sample City and take an evening walk."
+        "Museum visit followed by a flexible afternoon walk."
       ],
       "source_dates": [
-        "2027-01-02"
+        "2027-04-10"
       ],
       "locked": false
     },
     {
-      "id": "evt_example_museum",
-      "title": "Sample museum",
-      "category": "Tour",
-      "start": "2027-01-03T10:00",
-      "end": "2027-01-03T12:00",
-      "visit_id": "sample_city__01",
-      "location_id": "sample_city",
+      "id": "evt_train_paris_amsterdam",
+      "title": "Train to Amsterdam",
+      "category": "Travel",
+      "start": "2027-04-11T09:45",
+      "end": "2027-04-11T13:15",
+      "visit_id": "amsterdam_01",
+      "location_id": "amsterdam",
+      "from_location_id": "paris",
+      "to_location_id": "amsterdam",
+      "transport_mode": "Train",
+      "confidence": "High",
+      "notes": "Illustrative direct journey.",
+      "day_summaries": [
+        "Travel to Amsterdam and settle into the accommodation."
+      ],
+      "source_dates": [
+        "2027-04-11"
+      ],
+      "locked": true
+    },
+    {
+      "id": "evt_amsterdam_stay",
+      "title": "Amsterdam accommodation",
+      "category": "Accommodation",
+      "start": "2027-04-11T15:00",
+      "end": "2027-04-12T09:00",
+      "visit_id": "amsterdam_01",
+      "location_id": "amsterdam",
+      "from_location_id": "",
+      "to_location_id": "",
+      "transport_mode": "",
+      "confidence": "High",
+      "notes": "A multi-day event exercises timeline clipping.",
+      "day_summaries": [
+        "Travel to Amsterdam and settle into the accommodation.",
+        "Canal-side walk and a reserved afternoon activity."
+      ],
+      "source_dates": [
+        "2027-04-11",
+        "2027-04-12"
+      ],
+      "locked": true
+    },
+    {
+      "id": "evt_canal_walk",
+      "title": "Canal-side walk",
+      "category": "Activity",
+      "start": "2027-04-12T10:30",
+      "end": "2027-04-12T12:00",
+      "visit_id": "amsterdam_01",
+      "location_id": "amsterdam",
       "from_location_id": "",
       "to_location_id": "",
       "transport_mode": "",
       "confidence": "Medium",
-      "notes": "",
+      "notes": "Flexible and weather-dependent.",
       "day_summaries": [
-        "Explore a sample museum and park."
+        "Canal-side walk and a reserved afternoon activity."
       ],
       "source_dates": [
-        "2027-01-03"
+        "2027-04-12"
       ],
       "locked": false
     }
   ],
   "bookings": [
-    [
-      {
-        "__date__": "2027-01-02"
-      },
-      "Train",
-      "Home to Sample City",
-      "Morning",
-      "About 3h",
-      {
-        "__date__": "2026-12-01"
-      },
-      null,
-      "Example only",
-      "Low",
-      "Replace this with your own private booking notes in data/itinerary.json.",
-      ""
-    ]
+    {
+      "id": "booking_train_london_paris",
+      "title": "London to Paris rail ticket",
+      "type": "Transport",
+      "status": "booked",
+      "urgency": "High",
+      "date": "2027-04-09",
+      "time": "08:30",
+      "duration": "About 2 hours 30 minutes",
+      "booking_deadline": "2027-03-01",
+      "details": "Standard flexible ticket; example data only.",
+      "provider": "Example Rail",
+      "reference": "DEMO-RAIL-001",
+      "url": "https://example.com/rail-booking",
+      "notes": "No real reservation or personal information.",
+      "event_id": "evt_train_london_paris",
+      "visit_id": "paris_01",
+      "location_id": "paris",
+      "legacy": {}
+    },
+    {
+      "id": "booking_paris_stay",
+      "title": "Paris accommodation",
+      "type": "Accommodation",
+      "status": "booked",
+      "urgency": "Medium",
+      "date": "2027-04-09",
+      "time": "15:00 check-in",
+      "duration": "2 nights",
+      "booking_deadline": "2027-02-15",
+      "details": "Cancellable example room.",
+      "provider": "Example Hotel",
+      "reference": "DEMO-STAY-001",
+      "url": "https://example.com/accommodation",
+      "notes": "Demonstrates a booking linked to an event and visit.",
+      "event_id": "evt_paris_checkin",
+      "visit_id": "paris_01",
+      "location_id": "paris",
+      "legacy": {}
+    },
+    {
+      "id": "booking_paris_museum",
+      "title": "Museum timed entry",
+      "type": "Activity",
+      "status": "planned",
+      "urgency": "Low",
+      "date": "2027-04-10",
+      "time": "10:00",
+      "duration": "2 hours 30 minutes",
+      "booking_deadline": "2027-03-20",
+      "details": "Choose a refundable entry slot if available.",
+      "provider": "",
+      "reference": "",
+      "url": "",
+      "notes": "Shows an incomplete booking without inventing the later urgency UI.",
+      "event_id": "evt_paris_museum",
+      "visit_id": "paris_01",
+      "location_id": "paris",
+      "legacy": {}
+    }
   ]
 }

@@ -11,10 +11,16 @@ from app import validate_itinerary  # noqa: E402
 path = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'data' / 'itinerary.json'
 data = json.loads(path.read_text(encoding='utf-8'))
 result = validate_itinerary(data)
+for migration in result.get('migrations', []):
+    print(f'MIGRATION: {migration} (validated in memory; source file unchanged)')
 for warning in result['warnings']:
     print(f'WARNING: {warning}')
 for error in result['errors']:
     print(f'ERROR: {error}')
 if result['errors']:
     raise SystemExit(1)
-print(f'Valid itinerary: {len(data["days"])} days, {len(data["events"])} events, {len(data["visits"])} visits.')
+validated = result['itinerary']
+print(
+    f'Valid schema v{validated["schema_version"]} itinerary: '
+    f'{len(validated["days"])} days, {len(validated["events"])} events, {len(validated["visits"])} visits.'
+)
