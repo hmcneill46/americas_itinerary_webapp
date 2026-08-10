@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { DEFAULT_CONFIG, loadMapConfig, normaliseMapConfig } from '../static/map-config.js';
-import { buildTripMapModel, coordinatesForBounds, routeForDay, validCoordinates } from '../static/map-data.js';
+import { buildLocationMarkerGroups, buildTripMapModel, coordinatesForBounds, routeForDay, validCoordinates } from '../static/map-data.js';
 
 const example = JSON.parse(await readFile(new URL('../data/itinerary.example.json', import.meta.url), 'utf8'));
 const clone = value => structuredClone(value);
@@ -11,15 +11,17 @@ const clone = value => structuredClone(value);
 test('canonical itinerary becomes ordered visits and schematic event routes', () => {
   const model = buildTripMapModel(example);
   assert.deepEqual(model.visits.map(visit => visit.name), ['London', 'Paris', 'Amsterdam']);
+  assert.deepEqual(model.visits[0].coordinates, [-0.1278, 51.5074]);
   assert.deepEqual(model.routes.map(route => route.eventId), ['evt_train_london_paris', 'evt_train_paris_amsterdam']);
   assert.ok(model.routes.every(route => route.geometryKind === 'schematic'));
   assert.ok(model.routes.every(route => route.geometry.type === 'LineString'));
+  assert.deepEqual(model.routes[0].geometry.coordinates, [model.visits[0].coordinates, model.visits[1].coordinates]);
   assert.equal(model.visits[1].bookingCount, 3);
   assert.deepEqual(model.visits[1].accommodation, ['Paris accommodation']);
   assert.equal(routeForDay(model, example, example.days[1]).eventId, 'evt_train_london_paris');
 });
 
-test('return visits remain distinct and receive deterministic marker offsets', () => {
+test('return visits share one exact geographic marker group', () => {
   const itinerary = clone(example);
   itinerary.visits.push({
     ...clone(itinerary.visits[0]),
@@ -36,6 +38,15 @@ test('return visits remain distinct and receive deterministic marker offsets', (
   assert.deepEqual(londonVisits.map(visit => visit.id), ['london_01', 'london_02']);
   assert.deepEqual(londonVisits.map(visit => visit.duplicateIndex), [0, 1]);
   assert.ok(londonVisits.every(visit => visit.duplicateTotal === 2));
+  const markerGroups = buildLocationMarkerGroups(model);
+  assert.equal(markerGroups.length, 3);
+  assert.deepEqual(markerGroups.find(group => group.locationId === 'london'), {
+    locationId: 'london',
+    coordinates: [-0.1278, 51.5074],
+    name: 'London',
+    country: 'United Kingdom',
+    visits: londonVisits,
+  });
 });
 
 test('whole-trip bounds take the short way across the international date line', () => {
@@ -97,8 +108,14 @@ test('provider configuration falls back safely', async () => {
 
 test('map popup rendering uses DOM text nodes, never raw itinerary HTML', async () => {
   const source = await readFile(new URL('../static/map-view.js', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../static/styles.css', import.meta.url), 'utf8');
   assert.match(source, /\.setDOMContent\(/);
   assert.doesNotMatch(source, /\.setHTML\(|innerHTML\s*=/);
+  assert.match(source, /new maplibregl\.Marker\(\{ element: markerElement, anchor: 'center' \}\)/);
+  assert.doesNotMatch(source, /anchor: 'center', offset/);
+  assert.match(css, /\.trip-marker \{\s*position: absolute;/);
+  assert.doesNotMatch(css, /\.trip-marker:hover, \.trip-marker:focus-visible \{ transform:/);
+  assert.match(css, /\.trip-marker:hover \.trip-marker-visual/);
   const itinerary = clone(example);
   itinerary.locations.paris.name = '<img src=x onerror=alert(1)>';
   const model = buildTripMapModel(itinerary);

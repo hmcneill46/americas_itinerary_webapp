@@ -1,6 +1,6 @@
-import { loadMapConfig } from './map-config.js';
-import { buildTripMapModel, routeForDay } from './map-data.js';
-import { TripMap } from './map-view.js';
+import { loadMapConfig } from './map-config.js?v=map-marker-anchor-1';
+import { buildTripMapModel, routeForDay } from './map-data.js?v=map-marker-anchor-1';
+import { TripMap } from './map-view.js?v=map-marker-anchor-1';
 
 'use strict';
 

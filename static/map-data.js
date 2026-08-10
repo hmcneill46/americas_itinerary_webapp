@@ -222,6 +222,25 @@ export function buildTripMapModel(itinerary) {
   };
 }
 
+export function buildLocationMarkerGroups(model) {
+  const groups = new Map();
+  for (const visit of model?.visits || []) {
+    if (!Array.isArray(visit.coordinates) || visit.coordinates.length < 2) continue;
+    const group = groups.get(visit.locationId) || {
+      locationId: visit.locationId,
+      coordinates: [Number(visit.coordinates[0]), Number(visit.coordinates[1])],
+      name: visit.name,
+      country: visit.country,
+      visits: [],
+    };
+    group.visits.push(visit);
+    groups.set(visit.locationId, group);
+  }
+  return [...groups.values()]
+    .map(group => ({ ...group, visits: [...group.visits].sort((a, b) => a.order - b.order) }))
+    .sort((a, b) => a.visits[0].order - b.visits[0].order);
+}
+
 export function routeForDay(model, itinerary, day) {
   if (!day) return null;
   const travel = (itinerary.events || [])

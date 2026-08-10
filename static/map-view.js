@@ -1,5 +1,5 @@
 import * as maplibregl from './vendor/maplibre-gl/maplibre-gl.mjs?v=6.3.0';
-import { coordinatesForBounds } from './map-data.js';
+import { buildLocationMarkerGroups, coordinatesForBounds } from './map-data.js?v=map-marker-anchor-1';
 
 const EMPTY_STYLE = Object.freeze({
   version: 8,
@@ -139,6 +139,7 @@ export class TripMap {
     this.onSecondarySelect = onSecondarySelect;
     this.model = { visits: [], routes: [], secondaryLocations: [], coordinates: [] };
     this.markers = new Map();
+    this.markerGroups = new Map();
     this.modelSignature = '';
     this.styleReady = false;
     this.fallbackActive = false;
@@ -348,32 +349,73 @@ export class TripMap {
   syncMarkers() {
     for (const marker of this.markers.values()) marker.remove();
     this.markers.clear();
-    for (const visit of this.model.visits) {
-      const markerElement = document.createElement('button');
-      markerElement.type = 'button';
+    this.markerGroups.clear();
+    for (const group of buildLocationMarkerGroups(this.model)) {
+      this.markerGroups.set(group.locationId, group);
+      const markerElement = document.createElement('div');
       markerElement.className = 'trip-marker';
-      markerElement.dataset.visitId = visit.id;
-      markerElement.setAttribute('aria-label', `${visit.order}. ${visit.name}, ${visit.country}`);
-      markerElement.textContent = String(visit.order);
-      if (visit.duplicateTotal > 1) {
-        const badge = textNode('span', visit.duplicateIndex + 1, 'trip-marker-repeat');
+      markerElement.dataset.locationId = group.locationId;
+      markerElement.dataset.longitude = String(group.coordinates[0]);
+      markerElement.dataset.latitude = String(group.coordinates[1]);
+      markerElement.setAttribute('role', 'button');
+      markerElement.tabIndex = 0;
+      markerElement.setAttribute('aria-label', group.visits.length === 1
+        ? `${group.visits[0].order}. ${group.name}, ${group.country}`
+        : `${group.name}, ${group.country}. ${group.visits.length} visits. Activate to choose a visit.`);
+      const visual = document.createElement('span');
+      visual.className = 'trip-marker-visual';
+      visual.append(textNode('span', group.visits[0].order, 'trip-marker-number'));
+      if (group.visits.length > 1) {
+        const badge = textNode('span', group.visits.length, 'trip-marker-repeat');
         badge.setAttribute('aria-hidden', 'true');
-        markerElement.append(badge);
+        visual.append(badge);
       }
-      const angle = visit.duplicateTotal > 1 ? (visit.duplicateIndex / visit.duplicateTotal) * Math.PI * 2 - Math.PI / 2 : 0;
-      const radius = visit.duplicateTotal > 1 ? 19 : 0;
-      const offset = [Math.cos(angle) * radius, Math.sin(angle) * radius];
-      const marker = new maplibregl.Marker({ element: markerElement, anchor: 'center', offset })
-        .setLngLat(visit.coordinates)
+      markerElement.append(visual);
+      const marker = new maplibregl.Marker({ element: markerElement, anchor: 'center' })
+        .setLngLat(group.coordinates)
         .addTo(this.map);
-      markerElement.addEventListener('click', event => {
+      const openGroup = event => {
         event.stopPropagation();
-        this.setSelection({ visitId: visit.id, routeId: null });
-        this.popup.setLngLat(visit.coordinates).setDOMContent(buildVisitPopup(visit)).addTo(this.map);
-        this.onVisitSelect?.(visit);
+        this.openMarkerGroup(group);
+      };
+      markerElement.addEventListener('click', openGroup);
+      markerElement.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openGroup(event);
+        }
       });
-      this.markers.set(visit.id, marker);
+      this.markers.set(group.locationId, marker);
     }
+  }
+
+  openMarkerGroup(group) {
+    if (group.visits.length === 1) {
+      this.openVisit(group.visits[0]);
+      return;
+    }
+    const content = document.createElement('div');
+    content.className = 'trip-map-popup';
+    content.append(textNode('h3', group.name), textNode('p', `${group.country} · ${group.visits.length} visits`, 'trip-map-popup-place'));
+    content.append(textNode('p', 'Choose a visit to see its itinerary details.', 'trip-map-popup-note'));
+    const choices = document.createElement('div');
+    choices.className = 'trip-map-popup-choices';
+    for (const visit of group.visits) {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.className = 'trip-map-popup-choice';
+      choice.append(textNode('strong', `Visit ${visit.order}`), textNode('span', visit.startDate === visit.endDate ? visit.startDate : `${visit.startDate} – ${visit.endDate}`));
+      choice.addEventListener('click', () => this.openVisit(visit));
+      choices.append(choice);
+    }
+    content.append(choices);
+    this.popup.setLngLat(group.coordinates).setDOMContent(content).addTo(this.map);
+  }
+
+  openVisit(visit) {
+    this.setSelection({ visitId: visit.id, routeId: null });
+    this.popup.setLngLat(visit.coordinates).setDOMContent(buildVisitPopup(visit)).addTo(this.map);
+    this.onVisitSelect?.(visit);
   }
 
   setSelection({ visitId = null, routeId = null }) {
@@ -383,8 +425,9 @@ export class TripMap {
   }
 
   applySelection() {
-    for (const [visitId, marker] of this.markers) {
-      marker.getElement().classList.toggle('selected', visitId === this.selectedVisitId);
+    for (const [locationId, marker] of this.markers) {
+      const group = this.markerGroups.get(locationId);
+      marker.getElement().classList.toggle('selected', Boolean(group?.visits.some(visit => visit.id === this.selectedVisitId)));
     }
     if (this.styleReady && this.map.getLayer(LAYER_ROUTE_SELECTED)) {
       this.map.setFilter(LAYER_ROUTE_SELECTED, ['==', ['get', 'id'], this.selectedRouteId || '']);
