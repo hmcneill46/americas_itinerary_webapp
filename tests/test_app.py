@@ -124,6 +124,45 @@ def test_get_migrates_legacy_file_in_memory_without_rewriting(tmp_path, monkeypa
     assert target.read_bytes() == original_bytes
 
 
+def test_map_config_defaults_and_safe_overrides():
+    default = itinerary_app.build_map_config({})
+    assert default == {
+        "provider_name": "OpenFreeMap",
+        "style_url": "https://tiles.openfreemap.org/styles/positron",
+        "attribution": {
+            "text": "OpenFreeMap · OpenMapTiles · OpenStreetMap contributors",
+            "url": "https://openfreemap.org/",
+        },
+    }
+
+    custom = itinerary_app.build_map_config(
+        {
+            "TRIP_MAP_PROVIDER_NAME": "Home tiles",
+            "TRIP_MAP_STYLE_URL": "/static/maps/style.json",
+            "TRIP_MAP_ATTRIBUTION_TEXT": "Private map data",
+            "TRIP_MAP_ATTRIBUTION_URL": "https://example.test/licence",
+        }
+    )
+    assert custom["style_url"] == "/static/maps/style.json"
+    assert custom["provider_name"] == "Home tiles"
+
+
+def test_map_config_rejects_unsafe_urls(monkeypatch):
+    with monkeypatch.context() as context:
+        context.setenv("TRIP_MAP_STYLE_URL", "javascript:alert(1)")
+        response = TestClient(itinerary_app.app).get("/api/map-config")
+    assert response.status_code == 500
+    assert "Invalid map configuration" in response.json()["detail"]
+
+
+def test_vendored_maplibre_modules_have_browser_compatible_mime_type():
+    response = TestClient(itinerary_app.app).get(
+        "/static/vendor/maplibre-gl/maplibre-gl.mjs"
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/javascript")
+
+
 def test_malformed_metadata_and_strict_booleans_are_rejected():
     data = load_example()
     data["metadata"] = None

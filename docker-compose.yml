@@ -10,6 +10,10 @@ services:
       ITINERARY_HOST: 0.0.0.0
       ITINERARY_PORT: 8765
       ITINERARY_EDIT_TOKEN: "${ITINERARY_EDIT_TOKEN:-}"
+      TRIP_MAP_STYLE_URL: "${TRIP_MAP_STYLE_URL:-https://tiles.openfreemap.org/styles/positron}"
+      TRIP_MAP_PROVIDER_NAME: "${TRIP_MAP_PROVIDER_NAME:-OpenFreeMap}"
+      TRIP_MAP_ATTRIBUTION_TEXT: "${TRIP_MAP_ATTRIBUTION_TEXT:-OpenFreeMap · OpenMapTiles · OpenStreetMap contributors}"
+      TRIP_MAP_ATTRIBUTION_URL: "${TRIP_MAP_ATTRIBUTION_URL:-https://openfreemap.org/}"
     security_opt:
       - no-new-privileges:true
     cap_drop:

@@ -1,18 +1,12 @@
+import { loadMapConfig } from './map-config.js';
+import { buildTripMapModel, routeForDay } from './map-data.js';
+import { TripMap } from './map-view.js';
+
 'use strict';
 
 const DAY_MS = 86_400_000;
-const MAP_WIDTH = 1100;
-const MAP_HEIGHT = 850;
 const SAFE_COLOUR_RE = /^#[0-9A-Fa-f]{6}$/;
-const MODE_STYLES = {
-  'Flight': { colour: '#D1495B', dash: '7 5' },
-  'Road / bus': { colour: '#E58C47', dash: '' },
-  'Ferry / boat': { colour: '#2A9D8F', dash: '3 4' },
-  'Train': { colour: '#6C63A8', dash: '9 3 2 3' },
-  'Trek / walk': { colour: '#3A7D44', dash: '2 3' },
-  'Mixed': { colour: '#7A5CFA', dash: '6 3 2 3' },
-  'Local transfer': { colour: '#7A8793', dash: '2 3' },
-};
+const TRANSPORT_MODES = ['Flight', 'Road / bus', 'Ferry / boat', 'Train', 'Trek / walk', 'Mixed', 'Local transfer'];
 
 const state = {
   saved: null,
@@ -29,13 +23,11 @@ const state = {
   editLocationId: null,
   editDayDate: '',
   routeNeedsReflow: false,
-  basemap: null,
-  mapBuiltForSignature: '',
-  mapView: { x: 0, y: 0, w: MAP_WIDTH, h: MAP_HEIGHT },
-  mapOriginalView: { x: 0, y: 0, w: MAP_WIDTH, h: MAP_HEIGHT },
-  mapPlaying: false,
-  mapTimer: null,
-  mapDrag: null,
+  mapController: null,
+  mapInitialising: null,
+  mapModel: null,
+  pendingMapFocus: null,
+  mapExpanded: false,
 };
 
 const el = id => document.getElementById(id);
@@ -216,8 +208,6 @@ async function loadItinerary(showToast = false) {
   state.editTokenRequired = Boolean(payload.edit_token_required);
   state.selectedDate = state.selectedDate || payload.itinerary.metadata.start_date;
   state.editDayDate = state.editDayDate || state.selectedDate;
-  state.mapView = { ...state.mapOriginalView };
-  state.mapBuiltForSignature = '';
   state.selectedEventId = null;
   state.editEventId = null;
   state.editVisitId = sortedVisits(state.draft)[0]?.id || null;
@@ -399,7 +389,10 @@ function renderEventDetails() {
     </div>
     ${event.notes ? `<div class="details-section"><h3>Event and planning notes</h3><p>${escapeHtml(event.notes)}</p></div>` : ''}
     ${summaries ? `<div class="details-section"><h3>Daily context</h3><ul>${summaries}</ul></div>` : ''}
-    <div class="details-section"><button id="details-edit-event" class="primary-button">Edit this event</button></div>
+    <div class="details-section details-actions">
+      <button id="details-edit-event" class="primary-button">Edit this event</button>
+      ${(from && to && from.id !== to.id) ? '<button id="details-show-map" class="secondary-button">Show route on map</button>' : ''}
+    </div>
   </div>`;
   panel.querySelector('.details-category').style.backgroundColor = colourForCategory(event.category, data);
   el('details-edit-event').addEventListener('click', () => {
@@ -407,6 +400,11 @@ function renderEventDetails() {
     switchTab('edit');
     switchEditTab('events');
     renderEventEditor();
+  });
+  el('details-show-map')?.addEventListener('click', () => {
+    state.selectedDate = event.start.slice(0, 10);
+    state.pendingMapFocus = { type: 'route', id: event.id };
+    switchTab('map');
   });
 }
 
@@ -420,214 +418,243 @@ function jumpToDate(dateKey, behaviour = 'smooth') {
 }
 
 /* ---------------- Map ---------------- */
-function projectPoint(lon, lat, bounds) {
-  return {
-    x: (lon - bounds.min_lon) / (bounds.max_lon - bounds.min_lon) * MAP_WIDTH,
-    y: (bounds.max_lat - lat) / (bounds.max_lat - bounds.min_lat) * MAP_HEIGHT,
-  };
+function appendMapDetail(parent, label, value) {
+  const box = document.createElement('div');
+  box.className = 'detail-box';
+  const caption = document.createElement('small');
+  caption.textContent = label;
+  const content = document.createElement('strong');
+  content.textContent = String(value ?? '—');
+  box.append(caption, content);
+  parent.append(box);
 }
 
-function geometryPaths(geometry, bounds) {
-  const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.type === 'MultiPolygon' ? geometry.coordinates : [];
-  return polygons.map(polygon => polygon.map(ring => ring.map(([lon, lat], index) => {
-    const point = projectPoint(lon, lat, bounds);
-    return `${index ? 'L' : 'M'}${point.x.toFixed(2)},${point.y.toFixed(2)}`;
-  }).join(' ') + ' Z').join(' '));
-}
-
-function mapSignature(data) {
-  return JSON.stringify({ visits: data.visits, locations: data.locations, start: data.metadata.start_date, end: data.metadata.end_date });
-}
-
-async function ensureBasemap() {
-  if (state.basemap) return;
-  state.basemap = await fetch('/static/americas_basemap.geojson').then(response => response.json());
-}
-
-function visitForDay(day, data = currentData()) { return getVisit(day?.visit_id, data); }
-function currentMapDay() { return currentData()?.days?.[Number(el('map-slider').value) - 1] || currentData()?.days?.[0]; }
-
-function legPath(origin, destination, mode, bounds) {
-  const p1 = projectPoint(origin.longitude, origin.latitude, bounds);
-  const p2 = projectPoint(destination.longitude, destination.latitude, bounds);
-  if (mode === 'Flight') {
-    const mx = (p1.x + p2.x) / 2;
-    const my = (p1.y + p2.y) / 2;
-    const dx = p2.x - p1.x;
-    const dy = p2.y - p1.y;
-    const length = Math.max(Math.hypot(dx, dy), 0.001);
-    const cx = mx - dy / length * length * .14;
-    const cy = my + dx / length * length * .14;
-    return `M ${p1.x} ${p1.y} Q ${cx} ${cy} ${p2.x} ${p2.y}`;
+function mapHeading(title, subtitle, description = '') {
+  const fragment = document.createDocumentFragment();
+  const heading = document.createElement('h2');
+  heading.textContent = title;
+  const date = document.createElement('div');
+  date.className = 'map-date';
+  date.textContent = subtitle;
+  fragment.append(heading, date);
+  if (description) {
+    const paragraph = document.createElement('p');
+    paragraph.textContent = description;
+    fragment.append(paragraph);
   }
-  return `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
+  return fragment;
 }
 
-function mapRouteData(data = currentData()) {
-  const visits = sortedVisits(data);
-  return visits.map((visit, index) => {
-    const location = getLocation(visit.location_id, data);
-    const previous = index === 0 ? getLocation(data.metadata.home_location_id, data) : getLocation(visits[index - 1].location_id, data);
-    return {
-      ...visit,
-      location,
-      previous,
-      durationDays: visitDurationDays(visit),
-    };
-  });
+function renderMapRouteList(model) {
+  const list = el('map-route-list');
+  list.replaceChildren();
+  for (const visit of model.visits) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'map-route-row';
+    row.dataset.visitId = visit.id;
+    const number = document.createElement('span');
+    number.className = 'map-route-number';
+    number.textContent = visit.order;
+    const main = document.createElement('span');
+    main.className = 'map-route-main';
+    const name = document.createElement('strong');
+    name.textContent = visit.name;
+    const dates = document.createElement('small');
+    dates.textContent = visit.startDate === visit.endDate ? visit.startDate : `${visit.startDate} to ${visit.endDate}`;
+    main.append(name, dates);
+    const meta = document.createElement('span');
+    meta.className = 'map-route-mode';
+    meta.textContent = visit.country;
+    if (visit.duplicateTotal > 1) {
+      const repeat = document.createElement('strong');
+      repeat.textContent = `Visit ${visit.duplicateIndex + 1}/${visit.duplicateTotal}`;
+      meta.append(repeat);
+    }
+    row.append(number, main, meta);
+    row.addEventListener('click', () => {
+      selectMapVisit(visit);
+      state.mapController?.focusVisit(visit.id);
+    });
+    list.append(row);
+  }
 }
 
-async function renderMap(forceBuild = false) {
+function renderMapDayCard(day, route) {
+  const data = currentData();
+  const location = getLocation(day.location_id, data);
+  const panel = el('map-day-card');
+  panel.replaceChildren(mapHeading(location.name, `${humanDate(day.date)} · Day ${day.day_number}`, day.summary));
+  const grid = document.createElement('div');
+  grid.className = 'map-meta-grid';
+  appendMapDetail(grid, 'Base', day.base);
+  appendMapDetail(grid, 'Status', route ? 'Travelling / arriving' : 'At location');
+  appendMapDetail(grid, 'Travel', route?.mode || '—');
+  appendMapDetail(grid, 'Route geometry', route ? 'Schematic / approximate' : 'No major transfer');
+  panel.append(grid);
+  const actions = document.createElement('div');
+  actions.className = 'map-card-actions';
+  const focus = document.createElement('button');
+  focus.type = 'button';
+  focus.className = 'secondary-button';
+  focus.textContent = 'Focus this day';
+  focus.addEventListener('click', () => route ? state.mapController?.focusRoute(route.id) : state.mapController?.focusVisit(day.visit_id));
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'secondary-button';
+  open.textContent = 'Open day bars';
+  open.addEventListener('click', () => { switchTab('day'); jumpToDate(day.date); });
+  actions.append(focus, open);
+  panel.append(actions);
+}
+
+function renderMapVisitCard(visit) {
+  const panel = el('map-day-card');
+  panel.replaceChildren(mapHeading(`${visit.order}. ${visit.name}`, `${visit.country} · ${visit.startDate} to ${visit.endDate}`, visit.notes));
+  const grid = document.createElement('div');
+  grid.className = 'map-meta-grid';
+  appendMapDetail(grid, 'Stay', visit.nights === null ? '—' : `${visit.nights} night${visit.nights === 1 ? '' : 's'}`);
+  appendMapDetail(grid, 'Plans', `${visit.eventCount} event${visit.eventCount === 1 ? '' : 's'}`);
+  appendMapDetail(grid, 'Bookings', visit.bookingCount);
+  appendMapDetail(grid, 'Accommodation', visit.accommodation.join(', ') || 'Not linked');
+  panel.append(grid);
+  if (visit.duplicateTotal > 1) {
+    const repeat = document.createElement('p');
+    repeat.className = 'map-context-note';
+    repeat.textContent = `This is visit ${visit.duplicateIndex + 1} of ${visit.duplicateTotal} at the same location.`;
+    panel.append(repeat);
+  }
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'secondary-button map-open-button';
+  open.textContent = 'Open first day of visit';
+  open.addEventListener('click', () => { switchTab('day'); jumpToDate(visit.startDate); });
+  panel.append(open);
+}
+
+function renderMapRouteCard(route) {
+  const panel = el('map-day-card');
+  panel.replaceChildren(mapHeading(route.title, `${route.fromName} → ${route.toName}`, route.notes));
+  const grid = document.createElement('div');
+  grid.className = 'map-meta-grid';
+  appendMapDetail(grid, 'Mode', route.mode);
+  appendMapDetail(grid, 'Geometry', 'Schematic / approximate');
+  appendMapDetail(grid, 'Departure', route.start?.replace('T', ' ') || 'Not scheduled');
+  appendMapDetail(grid, 'Arrival', route.end?.replace('T', ' ') || 'Not scheduled');
+  panel.append(grid);
+  const note = document.createElement('p');
+  note.className = 'map-context-note';
+  note.textContent = 'The dashed line connects known endpoints; it is not the actual road, rail, air, or walking alignment.';
+  panel.append(note);
+  if (route.eventId) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'secondary-button map-open-button';
+    open.textContent = 'Open travel event';
+    open.addEventListener('click', () => {
+      const event = currentData().events.find(item => item.id === route.eventId);
+      if (!event) return;
+      state.selectedDate = event.start.slice(0, 10);
+      state.selectedEventId = event.id;
+      switchTab('day');
+      selectEvent(event.id, true);
+    });
+    panel.append(open);
+  }
+}
+
+function selectMapVisit(visit) {
+  const data = currentData();
+  const dayIndex = data.days.findIndex(day => day.visit_id === visit.id);
+  if (dayIndex >= 0) {
+    updateMapDay(dayIndex + 1);
+  }
+  state.mapController?.setSelection({ visitId: visit.id, routeId: null });
+  renderMapVisitCard(visit);
+  document.querySelectorAll('.map-route-row').forEach(row => row.classList.toggle('active', row.dataset.visitId === visit.id));
+}
+
+function selectMapRoute(route) {
+  if (route.start) state.selectedDate = route.start.slice(0, 10);
+  const dayIndex = currentData().days.findIndex(day => day.date === state.selectedDate);
+  if (dayIndex >= 0) updateMapDay(dayIndex + 1);
+  state.mapController?.setSelection({ visitId: route.visitId, routeId: route.id });
+  renderMapRouteCard(route);
+}
+
+async function ensureTripMap() {
+  if (state.mapController) return state.mapController;
+  if (state.mapInitialising) return state.mapInitialising;
+  state.mapInitialising = (async () => {
+    const config = await loadMapConfig();
+    state.mapController = new TripMap({
+      container: el('trip-map'),
+      statusElement: el('map-status'),
+      config,
+      onVisitSelect: selectMapVisit,
+      onRouteSelect: selectMapRoute,
+      onSecondarySelect: location => {
+        const panel = el('map-day-card');
+        panel.replaceChildren(mapHeading(location.name, `${location.country} · Secondary itinerary location`, 'Referenced by an event but not used as a primary visit destination.'));
+      },
+    });
+    return state.mapController;
+  })();
+  try {
+    return await state.mapInitialising;
+  } finally {
+    state.mapInitialising = null;
+  }
+}
+
+async function renderMap() {
   const data = currentData();
   if (!data) return;
-  await ensureBasemap();
-  const signature = mapSignature(data);
-  if (forceBuild || state.mapBuiltForSignature !== signature) {
-    buildMapSvg(data);
-    state.mapBuiltForSignature = signature;
-  }
+  state.mapModel = buildTripMapModel(data);
+  renderMapRouteList(state.mapModel);
   const slider = el('map-slider');
-  slider.max = data.days.length;
-  if (!slider.value || Number(slider.value) > data.days.length) slider.value = 1;
-  updateMapDay(Number(slider.value));
-}
-
-function buildMapSvg(data) {
-  const bounds = data.metadata.map_bounds;
-  el('map-countries').innerHTML = state.basemap.features.map(feature => geometryPaths(feature.geometry, bounds).map(path => `<path class="map-country" d="${path}"></path>`).join('')).join('');
-  const route = mapRouteData(data);
-  const locationCounts = {};
-  for (const item of route) locationCounts[item.location_id] = (locationCounts[item.location_id] || 0) + 1;
-  const seen = {};
-  route.forEach(item => {
-    seen[item.location_id] = (seen[item.location_id] || 0) + 1;
-    const total = locationCounts[item.location_id];
-    const occurrence = seen[item.location_id];
-    let lat = item.location.latitude;
-    let lon = item.location.longitude;
-    if (total > 1) {
-      const angle = 2 * Math.PI * (occurrence - 1) / total;
-      const radius = .22 + .07 * (occurrence - 1);
-      lat += radius * Math.sin(angle);
-      lon += radius * Math.cos(angle);
-    }
-    item.plot = { ...projectPoint(lon, lat, bounds), latitude: lat, longitude: lon };
-  });
-  const home = getLocation(data.metadata.home_location_id, data);
-  const startPoint = projectPoint(home.longitude, home.latitude, bounds);
-  const allNodes = [{
-    id: 'home_start', order: 0, location_id: home.id, location: home, plot: { ...startPoint, latitude: home.latitude, longitude: home.longitude },
-    durationDays: 0, start_date: data.metadata.start_date, end_date: data.metadata.start_date, arrival_mode: '', arrival_hours_estimate: 0,
-  }, ...route];
-  const legs = [];
-  for (let index = 1; index < allNodes.length; index++) {
-    const from = allNodes[index - 1];
-    const to = allNodes[index];
-    const style = MODE_STYLES[to.arrival_mode] || MODE_STYLES['Local transfer'];
-    const width = Math.min(7, 1.4 + Math.log1p(Math.max(Number(to.arrival_hours_estimate) || 0, 0)) * .85);
-    const origin = { longitude: from.plot.longitude, latitude: from.plot.latitude };
-    const destination = { longitude: to.plot.longitude, latitude: to.plot.latitude };
-    legs.push({ index, from, to, style, width });
-    const dash = style.dash ? `stroke-dasharray="${style.dash}"` : '';
-    el('map-legs').insertAdjacentHTML('beforeend', `<path class="map-leg future" data-leg-index="${index}" d="${legPath(origin, destination, to.arrival_mode, bounds)}" stroke="${style.colour}" stroke-width="${width}" ${dash}></path>`);
+  slider.max = Math.max(1, data.days.length);
+  const selectedIndex = data.days.findIndex(day => day.date === state.selectedDate);
+  slider.value = selectedIndex >= 0 ? selectedIndex + 1 : Math.min(Number(slider.value) || 1, data.days.length);
+  try {
+    const controller = await ensureTripMap();
+    controller.updateModel(state.mapModel);
+    updateMapDay(Number(slider.value));
+    requestAnimationFrame(() => controller.resize());
+    const pending = state.pendingMapFocus;
+    state.pendingMapFocus = null;
+    if (pending?.type === 'route') controller.focusRoute(pending.id);
+    if (pending?.type === 'visit') controller.focusVisit(pending.id);
+  } catch {
+    el('map-status').hidden = false;
+    el('map-status').className = 'map-status error';
+    el('map-status').textContent = 'The interactive map could not start. The itinerary and route list remain available.';
   }
-  el('map-nodes').innerHTML = allNodes.map(node => {
-    const baseRadius = Math.min(17, 6 + Math.sqrt(Math.max(node.durationDays, 0)) * 2.15);
-    const label = node.order === 0 ? 'S' : node.order;
-    return `<g class="map-node future" data-node-order="${node.order}" data-visit-id="${escapeHtml(node.id)}" transform="translate(${node.plot.x},${node.plot.y})"><g class="node-content"><circle r="${baseRadius}"></circle><text text-anchor="middle" dominant-baseline="central" font-size="${String(label).length > 1 ? 8 : 10}">${label}</text></g></g>`;
-  }).join('');
-
-  const tooltip = el('map-tooltip');
-  const wrap = el('map-wrap');
-  const showTooltip = (event, html) => {
-    tooltip.innerHTML = html;
-    tooltip.style.opacity = '1';
-    const rect = wrap.getBoundingClientRect();
-    tooltip.style.left = `${event.clientX - rect.left + 8}px`;
-    tooltip.style.top = `${event.clientY - rect.top + 8}px`;
-  };
-  document.querySelectorAll('.map-node').forEach(nodeElement => {
-    const order = Number(nodeElement.dataset.nodeOrder);
-    const node = allNodes.find(item => Number(item.order) === order);
-    nodeElement.addEventListener('mouseenter', event => showTooltip(event, `<strong>${order === 0 ? 'Start' : `${order}.`} ${escapeHtml(node.location.name)}</strong><br>${escapeHtml(node.location.country)}<br>${escapeHtml(node.start_date)} to ${escapeHtml(node.end_date)}<br>${node.durationDays} itinerary day(s)`));
-    nodeElement.addEventListener('mousemove', event => showTooltip(event, tooltip.innerHTML));
-    nodeElement.addEventListener('mouseleave', () => { tooltip.style.opacity = 0; });
-    nodeElement.addEventListener('click', () => {
-      if (order > 0) {
-        const dayIndex = data.days.findIndex(day => day.visit_id === node.id);
-        if (dayIndex >= 0) { el('map-slider').value = dayIndex + 1; updateMapDay(dayIndex + 1); }
-      }
-    });
-  });
-  document.querySelectorAll('.map-leg').forEach(legElement => {
-    const leg = legs.find(item => item.index === Number(legElement.dataset.legIndex));
-    legElement.addEventListener('mouseenter', event => showTooltip(event, `<strong>${escapeHtml(leg.from.location.name)} → ${escapeHtml(leg.to.location.name)}</strong><br>${escapeHtml(leg.to.arrival_mode)} · ${Number(leg.to.arrival_hours_estimate || 0)} planned hour(s)<br>${escapeHtml(leg.to.arrival_summary || '')}`));
-    legElement.addEventListener('mousemove', event => showTooltip(event, tooltip.innerHTML));
-    legElement.addEventListener('mouseleave', () => { tooltip.style.opacity = 0; });
-  });
-
-  el('map-legend').innerHTML = Object.entries(MODE_STYLES).map(([mode, style]) => `<div class="map-legend-item"><span class="map-legend-line" style="border-color:${style.colour};${mode === 'Flight' ? 'border-top-style:dashed' : ''}"></span>${escapeHtml(mode)}</div>`).join('');
-  el('map-route-list').innerHTML = route.map(item => `<button class="map-route-row" data-visit-id="${escapeHtml(item.id)}"><span class="map-route-number">${item.order}</span><span class="map-route-main"><strong>${escapeHtml(item.location.name)}</strong><small>${escapeHtml(item.start_date)} to ${escapeHtml(item.end_date)} · ${item.durationDays} day(s)</small></span><span class="map-route-mode">${escapeHtml(item.arrival_mode)}<strong>${Number(item.arrival_hours_estimate || 0)}h</strong></span></button>`).join('');
-  el('map-route-list').querySelectorAll('.map-route-row').forEach(row => row.addEventListener('click', () => {
-    const index = data.days.findIndex(day => day.visit_id === row.dataset.visitId);
-    if (index >= 0) { el('map-slider').value = index + 1; updateMapDay(index + 1); }
-  }));
-  updateMapViewBox();
 }
 
 function updateMapDay(dayNumber) {
   const data = currentData();
-  const day = data.days[Math.max(0, Math.min(data.days.length - 1, dayNumber - 1))];
+  if (!data?.days?.length) return;
+  const index = Math.max(0, Math.min(data.days.length - 1, dayNumber - 1));
+  const day = data.days[index];
   const visit = getVisit(day.visit_id, data);
-  const location = getLocation(day.location_id, data);
-  const route = sortedVisits(data);
-  const currentOrder = Number(visit.order);
-  const travelEvents = data.events.filter(event => eventOverlapsDay(event, day.date) && ['Travel', 'Hike'].includes(event.category) && event.to_location_id && event.from_location_id !== event.to_location_id);
-  const activeTravel = travelEvents.sort((a, b) => eventDurationMinutes(b) - eventDurationMinutes(a))[0];
-  el('map-slider').value = day.day_number;
+  const route = routeForDay(state.mapModel || buildTripMapModel(data), data, day);
+  state.selectedDate = day.date;
+  el('map-slider').value = index + 1;
   el('map-slider-label').textContent = `Day ${day.day_number} · ${humanDate(day.date, { year: false })}`;
-  el('map-day-card').innerHTML = `<h2>${escapeHtml(location.name)}</h2><div class="map-date">${humanDate(day.date)} · Day ${day.day_number}</div><p>${escapeHtml(day.summary)}</p><div class="map-meta-grid"><div class="detail-box"><small>Base</small><strong>${escapeHtml(day.base)}</strong></div><div class="detail-box"><small>Status</small><strong>${activeTravel ? 'Travelling / arriving' : 'At location'}</strong></div><div class="detail-box"><small>Travel</small><strong>${escapeHtml(activeTravel?.transport_mode || '—')}</strong></div><div class="detail-box"><small>Exact scheduled time</small><strong>${activeTravel ? formatDuration(eventDurationMinutes(activeTravel)) : 'No major transfer'}</strong></div></div>`;
-  document.querySelectorAll('.map-node').forEach(node => {
-    const order = Number(node.dataset.nodeOrder);
-    node.classList.remove('future', 'complete', 'current');
-    node.classList.add(order < currentOrder ? 'complete' : order === currentOrder ? 'current' : 'future');
-  });
-  document.querySelectorAll('.map-leg').forEach(leg => {
-    const order = Number(leg.dataset.legIndex);
-    leg.classList.remove('future', 'complete', 'current');
-    if (order < currentOrder) leg.classList.add('complete');
-    else if (order === currentOrder && activeTravel) leg.classList.add('current');
-    else leg.classList.add('future');
-  });
+  renderMapDayCard(day, route);
+  state.mapController?.setSelection({ visitId: visit.id, routeId: route?.id || null });
   document.querySelectorAll('.map-route-row').forEach(row => row.classList.toggle('active', row.dataset.visitId === visit.id));
   document.querySelector('.map-route-row.active')?.scrollIntoView({ block: 'nearest' });
 }
 
-function updateMapViewBox() {
-  const svg = el('route-map');
-  const v = state.mapView;
-  svg.setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`);
-  // SVG contents normally become physically larger while zooming. Applying an
-  // inverse scale keeps markers roughly constant on screen, with a very small
-  // growth at close zoom levels so they remain easy to click without overlap.
-  const inverseScale = Math.pow(v.w / MAP_WIDTH, 0.92);
-  document.querySelectorAll('.node-content').forEach(node => node.setAttribute('transform', `scale(${inverseScale})`));
-}
-
-function fitMapToRoute() {
-  const data = currentData();
-  const bounds = data.metadata.map_bounds;
-  const points = sortedVisits(data).map(visit => {
-    const location = getLocation(visit.location_id, data);
-    return projectPoint(location.longitude, location.latitude, bounds);
-  });
-  const minX = Math.min(...points.map(point => point.x));
-  const maxX = Math.max(...points.map(point => point.x));
-  const minY = Math.min(...points.map(point => point.y));
-  const maxY = Math.max(...points.map(point => point.y));
-  const pad = 55;
-  state.mapView = { x: minX - pad, y: minY - pad, w: Math.max(160, maxX - minX + pad * 2), h: Math.max(120, maxY - minY + pad * 2) };
-  updateMapViewBox();
+function toggleMapExpanded(force = !state.mapExpanded) {
+  state.mapExpanded = Boolean(force);
+  document.body.classList.toggle('map-expanded-open', state.mapExpanded);
+  el('view-map').classList.toggle('map-expanded', state.mapExpanded);
+  el('map-expand').textContent = state.mapExpanded ? 'Close expanded map' : 'Expand map';
+  el('map-expand').setAttribute('aria-pressed', String(state.mapExpanded));
+  requestAnimationFrame(() => state.mapController?.resize());
 }
 
 /* ---------------- Edit view ---------------- */
@@ -659,7 +686,7 @@ function renderEventEditor() {
   if (!event) return;
   const locations = Object.values(data.locations).sort((a, b) => a.name.localeCompare(b.name)).map(location => ({ value: location.id, label: `${location.name} — ${location.country}` }));
   const visits = sortedVisits(data).map(visit => ({ value: visit.id, label: `${visit.order}. ${getLocation(visit.location_id, data)?.name || visit.id} (${visit.start_date})` }));
-  const modes = Object.keys(MODE_STYLES).map(mode => ({ value: mode, label: mode }));
+  const modes = TRANSPORT_MODES.map(mode => ({ value: mode, label: mode }));
   el('event-id').value = event.id;
   el('event-title').value = event.title;
   el('event-category').value = event.category;
@@ -702,7 +729,6 @@ function applyEventForm(eventObject = null) {
   });
   markDirty(`Event changed: ${event.title}`);
   state.selectedEventId = event.id;
-  state.mapBuiltForSignature = '';
   renderEventEditor();
 }
 
@@ -765,7 +791,7 @@ function renderVisitEditor() {
   const visit = getVisit(state.editVisitId, data);
   if (!visit) { el('visit-editor').innerHTML = '<p>Select a route block.</p>'; return; }
   const locationOptions = Object.values(data.locations).sort((a, b) => a.name.localeCompare(b.name)).map(location => `<option value="${escapeHtml(location.id)}" ${location.id === visit.location_id ? 'selected' : ''}>${escapeHtml(location.name)} — ${escapeHtml(location.country)}</option>`).join('');
-  const modeOptions = Object.keys(MODE_STYLES).map(mode => `<option ${mode === visit.arrival_mode ? 'selected' : ''}>${mode}</option>`).join('');
+  const modeOptions = TRANSPORT_MODES.map(mode => `<option ${mode === visit.arrival_mode ? 'selected' : ''}>${mode}</option>`).join('');
   el('visit-editor').innerHTML = `<div class="section-heading"><div><h2>Visit ${visit.order}: ${escapeHtml(getLocation(visit.location_id, data)?.name || visit.location_id)}</h2><p>${visit.start_date} to ${visit.end_date} · ${visitDurationDays(visit)} day(s)</p></div><div class="toolbar-group"><button id="visit-minus-day" class="secondary-button small">− 1 day</button><button id="visit-plus-day" class="secondary-button small">+ 1 day</button></div></div>
     <form id="visit-form" class="form-grid">
       <label class="span-2">Location<select id="visit-location">${locationOptions}</select></label>
@@ -795,7 +821,6 @@ function renderVisitEditor() {
       });
     }
     markDirty('Visit details changed');
-    state.mapBuiltForSignature = '';
     renderEverything();
   });
   el('visit-plus-day').addEventListener('click', () => adjustVisitDuration(visit.id, 1));
@@ -815,8 +840,6 @@ function moveVisit(visitId, delta) {
   el('validation-status').textContent = 'Route order changed; dates have not been reflowed yet.';
   el('validation-status').className = 'validation-status invalid';
   renderRouteEditor();
-  state.mapBuiltForSignature = '';
-  renderMap(true);
 }
 
 function reflowRouteDates() {
@@ -855,7 +878,6 @@ function reflowRouteDates() {
   markDirty('Route dates reflowed; review and save when ready');
   el('validation-status').textContent = 'Route dates reflowed successfully.';
   el('validation-status').className = 'validation-status valid';
-  state.mapBuiltForSignature = '';
   renderEverything();
 }
 
@@ -931,7 +953,6 @@ function adjustVisitDuration(visitId, delta) {
   data.days.forEach((day, index) => { day.day_number = index + 1; });
   data.metadata.end_date = data.days.at(-1).date;
   markDirty(delta > 0 ? 'Visit extended by one day' : 'Visit shortened by one day');
-  state.mapBuiltForSignature = '';
   renderEverything();
 }
 
@@ -1036,7 +1057,6 @@ function cancelDraft() {
   state.draft = deepClone(state.saved);
   state.editEventId = null;
   state.selectedEventId = null;
-  state.mapBuiltForSignature = '';
   markClean();
   renderEverything();
   toast('Unsaved changes discarded.', 'info');
@@ -1064,7 +1084,6 @@ async function uploadDraft(file) {
     state.editLocationId = Object.keys(result.itinerary.locations)[0] || null;
     state.selectedDate = result.itinerary.metadata.start_date;
     state.editDayDate = result.itinerary.metadata.start_date;
-    state.mapBuiltForSignature = '';
     markDirty(`Uploaded ${file.name}; press Save to write it to the server`);
     renderEverything();
     if (result.warnings.length) showValidationDialog(result);
@@ -1093,31 +1112,16 @@ function bindEvents() {
   el('map-slider').addEventListener('input', event => updateMapDay(Number(event.target.value)));
   el('map-prev').addEventListener('click', () => { el('map-slider').value = Math.max(1, Number(el('map-slider').value) - 1); updateMapDay(Number(el('map-slider').value)); });
   el('map-next').addEventListener('click', () => { el('map-slider').value = Math.min(currentData().days.length, Number(el('map-slider').value) + 1); updateMapDay(Number(el('map-slider').value)); });
-  el('map-play').addEventListener('click', () => {
-    state.mapPlaying = !state.mapPlaying;
-    el('map-play').textContent = state.mapPlaying ? '❚❚ Pause' : '▶ Play';
-    if (state.mapPlaying) state.mapTimer = setInterval(() => { let next = Number(el('map-slider').value) + 1; if (next > currentData().days.length) next = 1; el('map-slider').value = next; updateMapDay(next); }, 340);
-    else clearInterval(state.mapTimer);
+  el('map-fit').addEventListener('click', () => state.mapController?.fitTrip());
+  el('map-focus-day').addEventListener('click', () => {
+    const data = currentData();
+    const day = data.days[Number(el('map-slider').value) - 1];
+    const route = routeForDay(state.mapModel || buildTripMapModel(data), data, day);
+    if (route) state.mapController?.focusRoute(route.id);
+    else state.mapController?.focusVisit(day.visit_id);
   });
-  el('map-fit').addEventListener('click', fitMapToRoute);
-  el('map-reset').addEventListener('click', () => { state.mapView = { ...state.mapOriginalView }; updateMapViewBox(); });
-  const svg = el('route-map');
-  svg.addEventListener('wheel', event => {
-    event.preventDefault();
-    const scale = event.deltaY > 0 ? 1.14 : .86;
-    const rect = svg.getBoundingClientRect();
-    const v = state.mapView;
-    const mx = v.x + (event.clientX - rect.left) / rect.width * v.w;
-    const my = v.y + (event.clientY - rect.top) / rect.height * v.h;
-    const newW = Math.min(MAP_WIDTH * 2.2, Math.max(90, v.w * scale));
-    const newH = newW * MAP_HEIGHT / MAP_WIDTH;
-    state.mapView = { x: mx - (mx - v.x) * newW / v.w, y: my - (my - v.y) * newH / v.h, w: newW, h: newH };
-    updateMapViewBox();
-  }, { passive: false });
-  svg.addEventListener('pointerdown', event => { state.mapDrag = { x: event.clientX, y: event.clientY, viewX: state.mapView.x, viewY: state.mapView.y }; svg.classList.add('dragging'); svg.setPointerCapture(event.pointerId); });
-  svg.addEventListener('pointermove', event => { if (!state.mapDrag) return; const rect = svg.getBoundingClientRect(); state.mapView.x = state.mapDrag.viewX - (event.clientX - state.mapDrag.x) / rect.width * state.mapView.w; state.mapView.y = state.mapDrag.viewY - (event.clientY - state.mapDrag.y) / rect.height * state.mapView.h; updateMapViewBox(); });
-  const endDrag = () => { state.mapDrag = null; svg.classList.remove('dragging'); };
-  svg.addEventListener('pointerup', endDrag); svg.addEventListener('pointercancel', endDrag);
+  el('map-expand').addEventListener('click', () => toggleMapExpanded());
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && state.mapExpanded) toggleMapExpanded(false); });
 
   el('event-search').addEventListener('input', renderEventEditor);
   el('add-event').addEventListener('click', addEvent);
@@ -1150,7 +1154,7 @@ function bindEvents() {
     }
     location.name = el('location-name').value.trim(); location.country = el('location-country').value.trim();
     location.timezone = el('location-timezone').value.trim(); location.latitude = Number(el('location-latitude').value); location.longitude = Number(el('location-longitude').value); location.notes = el('location-notes').value.trim();
-    markDirty(`Location changed: ${location.name}`); state.mapBuiltForSignature = ''; renderEverything(); switchEditTab('locations');
+    markDirty(`Location changed: ${location.name}`); renderEverything(); switchEditTab('locations');
   });
   el('delete-location').addEventListener('click', deleteLocation);
   el('save-button').addEventListener('click', () => saveDraft().catch(error => toast(error.message, 'error')));

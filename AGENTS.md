@@ -6,7 +6,7 @@ This is a private, self-hosted trip planner. It uses FastAPI, a plain JavaScript
 
 - `app.py` — HTTP API, revision checks, atomic saves and backups.
 - `trip_schema.py` — current typed schema, cross-record checks and migrations.
-- `static/` — browser UI and the current lightweight SVG map.
+- `static/` — browser UI; `map-data.js` derives provider-neutral features, `map-view.js` owns MapLibre, and `map-config.js` loads public provider settings.
 - `data/itinerary.example.json` — public, canonical, non-personal demo document.
 - `data/itinerary.json` — private live data; ignored by Git.
 - `docs/itinerary-schema.md` — authoritative JSON contract for people and AI tools.
@@ -30,7 +30,8 @@ Create `data/itinerary.json` from the example, install `requirements-dev.txt`, t
 - Treat itineraries, bookings, backups and exports as private. Keep them out of Git and Docker build contexts. Never serve `exports/` as static content.
 - The application has no read authentication. Bind only to loopback or a Tailscale address; never default to `0.0.0.0` on a host or recommend public port forwarding. The optional edit token protects writes only.
 - Preserve mandatory optimistic concurrency, atomic replacement, exact pre-save backups and bounded backup rotation.
-- Keep dependencies modest. Prefer standard library, FastAPI/Pydantic and browser-native ES modules/DOM APIs.
+- Keep dependencies modest. Prefer standard library, FastAPI/Pydantic and browser-native ES modules/DOM APIs. MapLibre is pinned under `static/vendor/`; do not add a frontend build pipeline merely to upgrade it.
+- Keep basemap, trip features and selection state separate. Current route lines are deliberately dashed and schematic; never present endpoint-only geometry as an actual road, rail or walking route.
 - Preserve route reflow and existing editors unless the task explicitly replaces them. Avoid a cosmetic frontend rewrite. Design and test phone-sized behavior for user-facing additions.
 
 ## Definition of done

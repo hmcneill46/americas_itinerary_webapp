@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#16324f">
   <title>Trip Planner</title>
+  <link rel="stylesheet" href="/static/vendor/maplibre-gl/maplibre-gl.css">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -80,23 +81,20 @@
           </div>
           <div class="toolbar-group">
             <strong id="map-slider-label">Day 1</strong>
-            <button id="map-play" class="secondary-button">▶ Play</button>
-            <button id="map-fit" class="secondary-button">Fit route</button>
-            <button id="map-reset" class="secondary-button">Reset map</button>
+            <button id="map-focus-day" class="secondary-button">Focus day</button>
+            <button id="map-fit" class="secondary-button">Fit whole trip</button>
+            <button id="map-expand" class="secondary-button" aria-pressed="false">Expand map</button>
           </div>
         </div>
         <div class="map-layout">
           <div id="map-wrap" class="map-wrap">
-            <svg id="route-map" viewBox="0 0 1100 850" aria-label="Interactive route map">
-              <g id="map-viewport">
-                <rect x="0" y="0" width="1100" height="850" class="map-sea"></rect>
-                <g id="map-countries"></g>
-                <g id="map-legs"></g>
-                <g id="map-nodes"></g>
-              </g>
-            </svg>
-            <div id="map-tooltip" class="map-tooltip"></div>
-            <div id="map-legend" class="map-legend"></div>
+            <div id="trip-map" class="trip-map" role="application" aria-label="Interactive world map showing trip visits and schematic routes"></div>
+            <div id="map-status" class="map-status" role="status" hidden></div>
+            <div class="map-legend" aria-label="Map legend">
+              <span><i class="legend-marker">1</i> Visit</span>
+              <span><i class="legend-secondary"></i> Event location</span>
+              <span><i class="legend-route"></i> Approximate route</span>
+            </div>
           </div>
           <aside class="map-side-panel">
             <div id="map-day-card" class="map-day-card"></div>
@@ -240,6 +238,6 @@
       <div class="dialog-actions"><button value="close" class="primary-button">Close</button></div>
     </form>
   </dialog>
-  <script src="/static/app.js" defer></script>
+  <script type="module" src="/static/app.js"></script>
 </body>
 </html>

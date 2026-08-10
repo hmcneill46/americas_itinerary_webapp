@@ -35,6 +35,8 @@ Run checks with:
 
 ```bash
 python -m pytest -q
+node --test tests/map-data.test.mjs
+node --check static/app.js static/map-config.js static/map-data.js static/map-view.js
 python tools/validate_itinerary.py data/itinerary.example.json
 ```
 
@@ -49,10 +51,12 @@ Download/upload supports an AI-assisted workflow: download JSON, edit it with a 
 ## Views and editing
 
 - **Day bars** render exact-minute event segments, overlaps, multi-day clipping, search and category filters.
-- **Map** shows the ordered route, travel mode, estimated transfer time and per-day progress using the existing lightweight offline SVG implementation.
+- **Map** uses a locally served, pinned MapLibre GL JS runtime with an OpenFreeMap Positron vector basemap. It shows ordered visit markers, repeated visits, secondary event locations and tappable dashed route connections. Map selections can open the relevant day or event, while explicit focus actions leave ordinary manual exploration alone.
 - **Edit** supports events, locations, visit duration/order, day information and route date reflow.
 
-Route reflow shifts a complete visit, its days and its events while retaining floating-local times. The current offline country-outline asset is limited and is intentionally not the planned future interactive world map; routes and coordinates remain globally valid even where an outline is unavailable.
+Route reflow shifts a complete visit, its days and its events while retaining floating-local times.
+
+All current route geometry is explicitly schematic: it connects known endpoints and does not claim to follow a road, railway, flight path or walking trail. No itinerary schema change was needed for the map overhaul. See [docs/map.md](docs/map.md) for provider configuration, attribution, failure behavior and the future PMTiles seam.
 
 ## Private deployment and Tailscale
 
@@ -92,16 +96,19 @@ ITINERARY_BIND_ADDRESS="$(tailscale ip -4)" docker compose up -d --build
 
 Inside the container the process listens on `0.0.0.0`; Docker publishes it only on the explicit host address. `.dockerignore` excludes live itineraries, backups, exports, secrets and development state, and the Dockerfile copies only runtime source plus the public example. `./data` is mounted for persistence and should be backed up separately.
 
+The application shell and pinned MapLibre library are served by this app. The default map style, tiles, fonts and sprites are fetched by each browser from OpenFreeMap, so basemap requests do not travel through the home server or Tailscale. The itinerary still loads and edits if that provider is unavailable; the map falls back to a plain background with trip overlays.
+
 ## Project layout
 
 ```text
 app.py                         FastAPI API, revisions, atomic saves and backups
 trip_schema.py                 Schema v5 models, validation and migrations
-static/                        Plain-JavaScript UI, CSS and current SVG map asset
+static/                        Plain-JavaScript UI, MapLibre integration and pinned map runtime
 data/itinerary.example.json    Canonical public demo data
 data/itinerary.json            Private live itinerary (ignored)
 data/backups/                  Private automatic backups (ignored)
 docs/itinerary-schema.md       Human- and AI-oriented JSON specification
+docs/map.md                    Map architecture, provider configuration and offline limits
 tests/                         Validation, migration and persistence tests
 tools/validate_itinerary.py    Command-line validator
 tools/migrate_existing_itinerary.py  Historical spreadsheet conversion utility

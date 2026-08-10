@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 import os
 import shutil
 import tempfile
@@ -12,6 +13,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -28,9 +30,47 @@ BACKUP_DIR = DATA_DIR / "backups"
 EDIT_TOKEN = os.environ.get("ITINERARY_EDIT_TOKEN", "")
 SAVE_LOCK = threading.Lock()
 MAX_BACKUPS = 50
+DEFAULT_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron"
 
-app = FastAPI(title="Trip Planner", version="1.1.0")
+app = FastAPI(title="Trip Planner", version="1.2.0")
+mimetypes.add_type("application/javascript", ".mjs")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+def _safe_map_url(value: str, *, allow_local: bool = False) -> str:
+    """Accept HTTPS provider URLs and, for styles, same-origin absolute paths."""
+
+    value = value.strip()
+    if allow_local and value.startswith("/") and not value.startswith("//"):
+        return value
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+        raise ValueError("must be an HTTPS URL" + (" or a same-origin /path" if allow_local else ""))
+    return value
+
+
+def build_map_config(environ: Any = os.environ) -> dict[str, Any]:
+    """Build the public, token-free map provider configuration."""
+
+    style_url = _safe_map_url(
+        environ.get("TRIP_MAP_STYLE_URL", DEFAULT_MAP_STYLE_URL), allow_local=True
+    )
+    attribution_url = _safe_map_url(
+        environ.get("TRIP_MAP_ATTRIBUTION_URL", "https://openfreemap.org/")
+    )
+    provider_name = environ.get("TRIP_MAP_PROVIDER_NAME", "OpenFreeMap").strip()
+    attribution_text = environ.get(
+        "TRIP_MAP_ATTRIBUTION_TEXT", "OpenFreeMap · OpenMapTiles · OpenStreetMap contributors"
+    ).strip()
+    if not provider_name or len(provider_name) > 80:
+        raise ValueError("TRIP_MAP_PROVIDER_NAME must contain 1 to 80 characters")
+    if not attribution_text or len(attribution_text) > 240:
+        raise ValueError("TRIP_MAP_ATTRIBUTION_TEXT must contain 1 to 240 characters")
+    return {
+        "provider_name": provider_name,
+        "style_url": style_url,
+        "attribution": {"text": attribution_text, "url": attribution_url},
+    }
 
 
 def read_bytes() -> bytes:
@@ -152,6 +192,14 @@ def get_itinerary() -> dict[str, Any]:
         "edit_token_required": bool(EDIT_TOKEN),
         "migrations": migrations,
     }
+
+
+@app.get("/api/map-config")
+def get_map_config() -> dict[str, Any]:
+    try:
+        return build_map_config()
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"Invalid map configuration: {exc}") from exc
 
 
 @app.post("/api/validate")

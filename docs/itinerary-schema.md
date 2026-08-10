@@ -41,6 +41,8 @@ Required fields:
 - `category_colours`: object mapping category names to strict six-digit hex colours such as `"#E58C47"`.
 - `map_bounds`: numeric `min_lon`, `max_lon`, `min_lat`, `max_lat`. Longitude is in `[-180, 180]`, latitude in `[-90, 90]`, minima must be less than maxima, and every location must be inside the bounds.
 
+The interactive map currently fits its camera from visit coordinates rather than using `map_bounds`. The validated bounds remain part of schema v5 for portability, compatibility and other consumers; keep them large enough to contain every location.
+
 Optional string fields default to `""`: `description`, `time_model_note`, `created_from`, and `default_currency`. A non-empty `default_currency` is a three-letter uppercase code such as `EUR`; it is only a trip-level hint, not a budgeting model.
 
 ```json
