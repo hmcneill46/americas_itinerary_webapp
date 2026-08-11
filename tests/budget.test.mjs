@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { calculateBudget, calculateTodayMoney, changeBudgetBaseCurrency, decimalAdd, decimalMultiply, expectedForCalendarDate, formatMoney, itemExpected, itemPaid, paymentNetForCalendarDate, presentNativeAndHome } from '../static/budget.js';
+import { calculateBudget, calculateTodayMoney, changeBudgetBaseCurrency, decimalAdd, decimalMultiply, expectedForCalendarDate, formatMoney, itemExpected, itemPaid, itemPlanningRange, paymentNetForCalendarDate, presentNativeAndHome, presentNativeAndHomeRange } from '../static/budget.js';
 
 const example = JSON.parse(await readFile(new URL('../data/itinerary.example.json', import.meta.url), 'utf8'));
 const clone = value => structuredClone(value);
@@ -64,6 +64,19 @@ test('fixed, visit-day and visit-night expectations derive once', () => {
   assert.equal(itemExpected(accommodation, example), '180');
   assert.equal(itemExpected(food, example), '50');
   assert.equal(itemExpected(stay, example), '150');
+});
+
+test('planning ranges scale with the same exact quantity as point estimates', () => {
+  const food = example.budget.cost_items.find(item => item.id === 'cost_paris_food');
+  const range = itemPlanningRange(food, example);
+  assert.deepEqual(range, {
+    lowUnitAmount: '20.00', highUnitAmount: '35.00', lowAmount: '40', highAmount: '70', quantity: '2',
+    confidence: 'medium', note: 'Daily food spend depends on how often meals are self-catered.',
+  });
+  assert.equal(presentNativeAndHomeRange(range.lowAmount, range.highAmount, food, 'GBP').text, 'EUR 40.00–70.00 · ≈ GBP 34.40–60.20');
+  const missing = structuredClone(food); missing.fx.rate_to_base = '';
+  assert.equal(presentNativeAndHomeRange('20', '35', missing, 'GBP').text, 'EUR 20.00–35.00 · GBP unavailable — FX needed');
+  assert.equal(presentNativeAndHomeRange('0', '0', missing, 'GBP').complete, true);
 });
 
 test('payments, partial payments and refunds produce coherent expected committed paid totals', () => {

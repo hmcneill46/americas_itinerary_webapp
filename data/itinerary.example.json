@@ -1,5 +1,5 @@
 {
-  "schema_version": 8,
+  "schema_version": 9,
   "metadata": {
     "title": "European Rail Weekend",
     "description": "Public demo data showing a short multi-country trip with local times, route changes and bookings.",
@@ -52,6 +52,66 @@
       "longitude": 4.9041,
       "timezone": "Europe/Amsterdam",
       "notes": "Second overnight stop."
+    }
+  },
+  "places": {
+    "london_st_pancras": {
+      "id": "london_st_pancras",
+      "name": "London St Pancras International",
+      "location_id": "london",
+      "type": "Railway station",
+      "address": "Euston Road, London",
+      "coordinates": {"latitude": 51.5314, "longitude": -0.1263},
+      "website": "",
+      "notes": "Public station detail for the demonstration journey."
+    },
+    "paris_gare_du_nord": {
+      "id": "paris_gare_du_nord",
+      "name": "Gare du Nord",
+      "location_id": "paris",
+      "type": "Railway station",
+      "address": "18 Rue de Dunkerque, Paris",
+      "coordinates": {"latitude": 48.8809, "longitude": 2.3553},
+      "website": "",
+      "notes": "Known arrival and later departure point."
+    },
+    "paris_demo_hotel": {
+      "id": "paris_demo_hotel",
+      "name": "Example Paris Hotel",
+      "location_id": "paris",
+      "type": "Accommodation",
+      "address": "Demonstration address, central Paris",
+      "website": "https://example.com/accommodation",
+      "notes": "Fictional public-safe accommodation used only by the example itinerary."
+    },
+    "paris_orangerie": {
+      "id": "paris_orangerie",
+      "name": "Musée de l’Orangerie",
+      "location_id": "paris",
+      "type": "Museum",
+      "address": "Jardin des Tuileries, Paris",
+      "coordinates": {"latitude": 48.8638, "longitude": 2.3226},
+      "website": "",
+      "notes": "Illustrative exact activity venue."
+    },
+    "amsterdam_centraal": {
+      "id": "amsterdam_centraal",
+      "name": "Amsterdam Centraal",
+      "location_id": "amsterdam",
+      "type": "Railway station",
+      "address": "Stationsplein, Amsterdam",
+      "coordinates": {"latitude": 52.378, "longitude": 4.9003},
+      "website": "",
+      "notes": "Known rail arrival point."
+    },
+    "amsterdam_demo_stay": {
+      "id": "amsterdam_demo_stay",
+      "name": "Example Canal Guesthouse",
+      "location_id": "amsterdam",
+      "type": "Accommodation",
+      "address": "Demonstration address, Amsterdam",
+      "website": "",
+      "notes": "Fictional public-safe accommodation. Coordinates are intentionally unknown."
     }
   },
   "visits": [
@@ -189,6 +249,23 @@
       "location_id": "paris",
       "from_location_id": "london",
       "to_location_id": "paris",
+      "place_id": "",
+      "from_place_id": "london_st_pancras",
+      "to_place_id": "paris_gare_du_nord",
+      "travel_logistics": {
+        "operator": "Example Rail",
+        "service_number": "EX9012",
+        "seat": "Coach 8, seat 42",
+        "departure_terminal": "International departures",
+        "departure_platform": "",
+        "departure_gate": "",
+        "arrival_terminal": "",
+        "arrival_platform": "",
+        "arrival_gate": "",
+        "recommended_arrival_lead_minutes": 75,
+        "baggage_note": "Keep ticket and identity document accessible.",
+        "instructions": "Pass security and border checks before boarding."
+      },
       "transport_mode": "Train",
       "confidence": "High",
       "notes": "Illustrative local departure and arrival times.",
@@ -210,6 +287,7 @@
       "location_id": "paris",
       "from_location_id": "",
       "to_location_id": "",
+      "place_id": "paris_demo_hotel",
       "transport_mode": "",
       "confidence": "High",
       "notes": "Leave luggage earlier if the room is not ready.",
@@ -231,6 +309,7 @@
       "location_id": "paris",
       "from_location_id": "",
       "to_location_id": "",
+      "place_id": "paris_orangerie",
       "transport_mode": "",
       "confidence": "Medium",
       "notes": "A timed activity used to demonstrate booking references.",
@@ -252,6 +331,23 @@
       "location_id": "amsterdam",
       "from_location_id": "paris",
       "to_location_id": "amsterdam",
+      "place_id": "",
+      "from_place_id": "paris_gare_du_nord",
+      "to_place_id": "amsterdam_centraal",
+      "travel_logistics": {
+        "operator": "Example Rail",
+        "service_number": "IC Demo 123",
+        "seat": "",
+        "departure_terminal": "",
+        "departure_platform": "Check station board",
+        "departure_gate": "",
+        "arrival_terminal": "",
+        "arrival_platform": "",
+        "arrival_gate": "",
+        "recommended_arrival_lead_minutes": 20,
+        "baggage_note": "Carry-on luggage remains with the traveller.",
+        "instructions": "Platform is not yet known; do not infer one."
+      },
       "transport_mode": "Train",
       "confidence": "High",
       "notes": "Illustrative direct journey.",
@@ -273,6 +369,7 @@
       "location_id": "amsterdam",
       "from_location_id": "",
       "to_location_id": "",
+      "place_id": "amsterdam_demo_stay",
       "transport_mode": "",
       "confidence": "High",
       "notes": "A multi-day event exercises timeline clipping.",
@@ -327,6 +424,7 @@
       "event_id": "evt_train_london_paris",
       "visit_id": "paris_01",
       "location_id": "paris",
+      "place_id": "paris_gare_du_nord",
       "cost_item_id": "cost_rail_london_paris",
       "legacy": {}
     },
@@ -348,6 +446,7 @@
       "event_id": "evt_paris_checkin",
       "visit_id": "paris_01",
       "location_id": "paris",
+      "place_id": "paris_demo_hotel",
       "cost_item_id": "cost_paris_accommodation",
       "legacy": {}
     },
@@ -369,6 +468,7 @@
       "event_id": "evt_paris_museum",
       "visit_id": "paris_01",
       "location_id": "paris",
+      "place_id": "paris_orangerie",
       "cost_item_id": "cost_paris_museum",
       "legacy": {}
     },
@@ -462,6 +562,7 @@
         "category_id": "food_drink",
         "currency": "EUR",
         "expected": {"unit_amount": "25.00", "basis": "per_day", "quantity_source": "visit_days", "quantity": 0},
+        "planning_range": {"low_unit_amount": "20.00", "high_unit_amount": "35.00", "confidence": "medium", "note": "Daily food spend depends on how often meals are self-catered."},
         "committed_amount": "0",
         "fx": {"rate_to_base": "0.86", "as_of_date": "2027-01-15", "source": "Manual planning rate", "note": "Derived from the two-day Paris visit."},
         "payments": [],
@@ -479,6 +580,7 @@
         "category_id": "activities_tours",
         "currency": "EUR",
         "expected": {"unit_amount": "22.00", "basis": "fixed", "quantity_source": "manual", "quantity": 1},
+        "planning_range": {"low_unit_amount": "18.00", "high_unit_amount": "28.00", "confidence": "medium", "note": "Exact ticket type has not yet been selected."},
         "committed_amount": "0",
         "fx": {"rate_to_base": "0.86", "as_of_date": "2027-01-15", "source": "Manual planning rate", "note": "Unbooked estimate."},
         "payments": [],

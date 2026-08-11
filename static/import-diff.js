@@ -1,7 +1,7 @@
 import { calculateBudget, decimalCompare, formatMoney } from './budget.js';
 import { deriveBookingAction } from './booking.js';
 
-const entityLabel = { locations: 'Place', visits: 'Visit', events: 'Event', bookings: 'Booking', cost_items: 'Cost item' };
+const entityLabel = { locations: 'Location', places: 'Exact place', visits: 'Visit', events: 'Event', bookings: 'Booking', cost_items: 'Cost item' };
 const idMap = (items, key = 'id') => new Map(Array.isArray(items) ? items.map(item => [item[key], item]) : Object.values(items || {}).map(item => [item[key], item]));
 const date = value => String(value || '').slice(0, 10);
 const names = (itinerary, entity, item) => entity === 'locations' ? item.name : item.title || item.name || item.id;
@@ -15,9 +15,10 @@ function entityChanges(current, imported, entity) {
   for (const [id, previous] of currentMap) { if (!nextMap.has(id)) out.push(change(group,'removed',`${entityLabel[entity]} removed: ${names(current,entity,previous)}`, '', '', entity === 'visits' || entity === 'events' ? 'high' : 'normal')); }
   for (const [id, next] of nextMap) { const previous=currentMap.get(id); if (!previous) continue;
     const fields = entity === 'visits' ? [['start_date','start date'],['end_date','end date'],['location_id','location']]
-      : entity === 'events' ? [['title','title'],['start','start'],['end','end'],['location_id','location'],['transport_mode','transport'],['outcome','outcome'],['actual_start','actual start'],['actual_end','actual end'],['replaces_event_id','replacement link']]
-      : entity === 'bookings' ? [['lifecycle','lifecycle'],['provider','provider'],['cost_item_id','budget link'],['timing.strategy','booking strategy'],['timing.hard_deadline','hard deadline']]
-      : entity === 'cost_items' ? [['expected.unit_amount','expected unit amount'],['committed_amount','committed amount'],['fx.rate_to_base','FX rate']]
+      : entity === 'events' ? [['title','title'],['start','start'],['end','end'],['location_id','location'],['place_id','exact venue'],['from_place_id','departure place'],['to_place_id','arrival place'],['transport_mode','transport'],['travel_logistics.operator','operator'],['travel_logistics.service_number','service number'],['travel_logistics.seat','seat'],['travel_logistics.departure_terminal','departure terminal'],['travel_logistics.departure_platform','departure platform'],['travel_logistics.departure_gate','departure gate'],['travel_logistics.arrival_terminal','arrival terminal'],['travel_logistics.arrival_platform','arrival platform'],['travel_logistics.arrival_gate','arrival gate'],['travel_logistics.recommended_arrival_lead_minutes','arrival lead time'],['travel_logistics.baggage_note','baggage note'],['travel_logistics.instructions','travel instructions'],['outcome','outcome'],['actual_start','actual start'],['actual_end','actual end'],['replaces_event_id','replacement link']]
+      : entity === 'bookings' ? [['lifecycle','lifecycle'],['provider','provider'],['place_id','exact place'],['cost_item_id','budget link'],['timing.strategy','booking strategy'],['timing.hard_deadline','hard deadline']]
+      : entity === 'cost_items' ? [['expected.unit_amount','expected unit amount'],['planning_range.low_unit_amount','likely low unit amount'],['planning_range.high_unit_amount','likely high unit amount'],['planning_range.confidence','estimate confidence'],['planning_range.note','estimate note'],['committed_amount','committed amount'],['fx.rate_to_base','FX rate']]
+      : entity === 'places' ? [['name','name'],['location_id','parent location'],['type','type'],['address','address'],['coordinates.latitude','latitude'],['coordinates.longitude','longitude'],['website','website'],['notes','notes']]
       : [['name','name'],['latitude','latitude'],['longitude','longitude']];
     const get=(obj,path)=>path.split('.').reduce((v,k)=>v?.[k],obj) ?? '';
     for (const [path,label] of fields) if (String(get(previous,path)) !== String(get(next,path))) out.push(change(group,'modified',`${names(imported,entity,next)}: ${label}`,String(get(previous,path)),String(get(next,path)), path.includes('lifecycle') && next.lifecycle === 'cancelled' ? 'high' : path === 'start_date' || path === 'end_date' || path === 'start' || path === 'end' ? 'high' : 'normal'));
@@ -28,7 +29,7 @@ function entityChanges(current, imported, entity) {
 export function semanticDiff(current, imported, today = new Date().toISOString().slice(0,10)) {
   const changes=[]; if (current.metadata.title !== imported.metadata.title) changes.push(change('overview','modified','Trip title',current.metadata.title,imported.metadata.title,'high'));
   for (const key of ['start_date','end_date']) if (current.metadata[key]!==imported.metadata[key]) changes.push(change('overview','modified',key==='start_date'?'Trip start date':'Trip end date',current.metadata[key],imported.metadata[key],'high'));
-  for (const entity of ['locations','visits','events','bookings','cost_items']) changes.push(...entityChanges(current,imported,entity));
+  for (const entity of ['locations','places','visits','events','bookings','cost_items']) changes.push(...entityChanges(current,imported,entity));
   const beforeBudget=calculateBudget(current), afterBudget=calculateBudget(imported), currency=afterBudget.baseCurrency;
   for (const [key,label] of [['expected','Expected cost'],['committed','Committed'],['paid','Paid'],['headroom','Budget headroom']]) { const a=beforeBudget.totals[key], b=afterBudget.totals[key]; if(a!==null&&b!==null&&decimalCompare(a,b)!==0) changes.push(change('budget','modified',label,formatMoney(a,currency),formatMoney(b,currency),'normal')); }
   for (const booking of imported.bookings) { const old=current.bookings.find(item=>item.id===booking.id); if(!old) continue; const oldAction=deriveBookingAction(old,current,today), newAction=deriveBookingAction(booking,imported,today); if(oldAction.recommendedDate!==newAction.recommendedDate) changes.push(change('bookings','modified',`${booking.title}: recommended booking date`,oldAction.recommendedDate||'not set',newAction.recommendedDate||'not set','normal')); }

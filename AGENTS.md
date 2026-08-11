@@ -26,7 +26,7 @@ Actual-device feedback is authoritative when it conflicts with browser emulation
 - The JSON document is the product boundary: it must remain human-readable, deterministic, portable and safe for AI-assisted export/edit/import.
 - AI import must migrate and validate on the server in memory, present a semantic preview, then explicitly replace only the draft. Never let imported JSON alter server revision state or bypass normal revision-protected save/backup behaviour.
 - Increment `schema_version` only for a real format change. Add one deterministic migration per version, retain unknown/legacy values, validate the migrated result, document it, and add fixture-based migration and idempotence tests. Budget money is exact decimal strings in JSON, not JavaScript/Python binary floats; keep its shared calculations in `static/budget.js` so summaries and breakdowns agree. Booking lifecycle and timing are distinct; keep deterministic action-date derivation in `static/booking.js`, never a hand-maintained urgency score.
-- Defined fields must not rely on array positions. IDs must be stable and references must validate.
+- Defined fields must not rely on array positions. IDs must be stable and references must validate. Keep broad route `locations` distinct from schema-v9 exact `places`; never invent venue coordinates or operational travel details.
 - Event timestamps are floating local wall-clock values (`YYYY-MM-DDTHH:MM`) with no `Z` or UTC offset. Do not let browser or server timezone conversion alter them.
 - Preserve unknown JSON extension fields. Never silently discard meaningful user data during validation or migration.
 

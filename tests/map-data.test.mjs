@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { DEFAULT_CONFIG, loadMapConfig, normaliseMapConfig } from '../static/map-config.js';
-import { buildLocationMarkerGroups, buildTripMapModel, buildVisitPlanSummary, coordinatesForBounds, routeForDay, validCoordinates } from '../static/map-data.js';
+import { buildLocationMarkerGroups, buildTripMapModel, buildVisitPlanSummary, contextualExactPlaces, coordinatesForBounds, routeForDay, validCoordinates } from '../static/map-data.js';
 
 const example = JSON.parse(await readFile(new URL('../data/itinerary.example.json', import.meta.url), 'utf8'));
 const clone = value => structuredClone(value);
@@ -47,6 +47,18 @@ test('return visits share one exact geographic marker group', () => {
     country: 'United Kingdom',
     visits: londonVisits,
   });
+});
+
+test('exact places keep longitude-latitude ordering and only appear in selected context', () => {
+  const model = buildTripMapModel(example);
+  const station = model.exactPlaces.find(place => place.id === 'london_st_pancras');
+  assert.deepEqual(station.coordinates, [-0.1263, 51.5314]);
+  assert.equal(contextualExactPlaces(model).length, 0, 'the full trip map is not cluttered with every venue');
+  const routePlaces = contextualExactPlaces(model, { routeId: 'event:evt_train_london_paris' });
+  assert.deepEqual(routePlaces.map(place => place.id).sort(), ['london_st_pancras', 'paris_gare_du_nord']);
+  const visitPlaces = contextualExactPlaces(model, { visitId: 'paris_01' });
+  assert.ok(visitPlaces.some(place => place.id === 'paris_orangerie'));
+  assert.ok(!visitPlaces.some(place => place.id === 'paris_demo_hotel'), 'places without invented coordinates do not become map points');
 });
 
 test('visit plan summaries are chronological, outcome-aware, and bounded for map details', () => {

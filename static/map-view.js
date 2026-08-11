@@ -1,5 +1,5 @@
 import * as maplibregl from './vendor/maplibre-gl/maplibre-gl.mjs?v=6.3.0';
-import { buildLocationMarkerGroups, coordinatesForBounds } from './map-data.js?v=map-marker-anchor-1';
+import { buildLocationMarkerGroups, contextualExactPlaces, coordinatesForBounds } from './map-data.js?v=map-places-v1';
 
 const EMPTY_STYLE = Object.freeze({
   version: 8,
@@ -9,12 +9,15 @@ const EMPTY_STYLE = Object.freeze({
 
 const SOURCE_ROUTES = 'trip-routes';
 const SOURCE_SECONDARY = 'trip-secondary-locations';
+const SOURCE_EXACT_PLACES = 'trip-exact-places';
 const LAYER_ROUTE_CASING = 'trip-route-casing';
 const LAYER_ROUTE = 'trip-route';
 const LAYER_ROUTE_SELECTED = 'trip-route-selected';
 const LAYER_ROUTE_HIT = 'trip-route-hit';
 const LAYER_SECONDARY = 'trip-secondary';
 const LAYER_SECONDARY_HIT = 'trip-secondary-hit';
+const LAYER_EXACT_PLACES = 'trip-exact-places';
+const LAYER_EXACT_PLACES_HIT = 'trip-exact-places-hit';
 
 function featureCollection(features = []) {
   return { type: 'FeatureCollection', features };
@@ -39,6 +42,13 @@ function secondaryFeatures(model) {
     id: location.id,
     geometry: { type: 'Point', coordinates: location.coordinates },
     properties: { id: location.id },
+  })));
+}
+
+function exactPlaceFeatures(model, selection) {
+  return featureCollection(contextualExactPlaces(model, selection).map(place => ({
+    type: 'Feature', id: place.id, geometry: { type: 'Point', coordinates: place.coordinates },
+    properties: { id: place.id, type: place.type },
   })));
 }
 
@@ -130,14 +140,15 @@ class SafeAttributionControl {
 }
 
 export class TripMap {
-  constructor({ container, statusElement, config, onVisitSelect, onRouteSelect, onSecondarySelect }) {
+  constructor({ container, statusElement, config, onVisitSelect, onRouteSelect, onSecondarySelect, onPlaceSelect }) {
     this.container = container;
     this.statusElement = statusElement;
     this.config = config;
     this.onVisitSelect = onVisitSelect;
     this.onRouteSelect = onRouteSelect;
     this.onSecondarySelect = onSecondarySelect;
-    this.model = { visits: [], routes: [], secondaryLocations: [], coordinates: [] };
+    this.onPlaceSelect = onPlaceSelect;
+    this.model = { visits: [], routes: [], secondaryLocations: [], exactPlaces: [], coordinates: [] };
     this.markers = new Map();
     this.markerGroups = new Map();
     this.modelSignature = '';
@@ -146,6 +157,7 @@ export class TripMap {
     this.hasInitialFit = false;
     this.selectedVisitId = null;
     this.selectedRouteId = null;
+    this.selectedPlaceId = null;
     this.popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, maxWidth: '320px', offset: 18 });
 
     try {
@@ -302,6 +314,26 @@ export class TripMap {
         paint: { 'circle-radius': 15, 'circle-opacity': 0 },
       });
     }
+    if (!this.map.getSource(SOURCE_EXACT_PLACES)) {
+      this.map.addSource(SOURCE_EXACT_PLACES, { type: 'geojson', data: featureCollection() });
+      this.map.addLayer({
+        id: LAYER_EXACT_PLACES,
+        type: 'circle',
+        source: SOURCE_EXACT_PLACES,
+        paint: {
+          'circle-radius': 7,
+          'circle-color': ['case', ['==', ['get', 'id'], this.selectedPlaceId || ''], '#16324f', '#fffdf8'],
+          'circle-stroke-color': '#16324f',
+          'circle-stroke-width': 2,
+        },
+      });
+      this.map.addLayer({
+        id: LAYER_EXACT_PLACES_HIT,
+        type: 'circle',
+        source: SOURCE_EXACT_PLACES,
+        paint: { 'circle-radius': 18, 'circle-opacity': 0 },
+      });
+    }
   }
 
   bindLayerInteractions(map) {
@@ -323,7 +355,20 @@ export class TripMap {
       this.popup.setLngLat(location.coordinates).setDOMContent(content).addTo(this.map);
       this.onSecondarySelect?.(location);
     });
-    for (const layer of [LAYER_ROUTE_HIT, LAYER_SECONDARY_HIT]) {
+    map.on('click', LAYER_EXACT_PLACES_HIT, event => {
+      const id = event.features?.[0]?.properties?.id;
+      const place = this.model.exactPlaces.find(item => item.id === id);
+      if (!place) return;
+      this.setSelection({ placeId: place.id, visitId: this.selectedVisitId, routeId: this.selectedRouteId });
+      const content = document.createElement('div');
+      content.className = 'trip-map-popup';
+      content.append(textNode('p', place.type, 'trip-map-popup-kicker'), textNode('h3', place.name));
+      if (place.address) content.append(detailLine('Address', place.address));
+      content.append(detailLine('Location', `${place.locationName}${place.country ? `, ${place.country}` : ''}`));
+      this.popup.setLngLat(place.coordinates).setDOMContent(content).addTo(this.map);
+      this.onPlaceSelect?.(place);
+    });
+    for (const layer of [LAYER_ROUTE_HIT, LAYER_SECONDARY_HIT, LAYER_EXACT_PLACES_HIT]) {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     }
@@ -344,6 +389,13 @@ export class TripMap {
   syncSources() {
     this.map.getSource(SOURCE_ROUTES)?.setData(routeFeatures(this.model));
     this.map.getSource(SOURCE_SECONDARY)?.setData(secondaryFeatures(this.model));
+    this.syncExactPlaces();
+  }
+
+  syncExactPlaces() {
+    this.map.getSource(SOURCE_EXACT_PLACES)?.setData(exactPlaceFeatures(this.model, {
+      visitId: this.selectedVisitId || '', routeId: this.selectedRouteId || '', placeId: this.selectedPlaceId || '',
+    }));
   }
 
   syncMarkers() {
@@ -418,9 +470,10 @@ export class TripMap {
     this.onVisitSelect?.(visit);
   }
 
-  setSelection({ visitId = null, routeId = null }) {
+  setSelection({ visitId = null, routeId = null, placeId = null }) {
     this.selectedVisitId = visitId;
     this.selectedRouteId = routeId;
+    this.selectedPlaceId = placeId;
     this.applySelection();
   }
 
@@ -431,6 +484,8 @@ export class TripMap {
     }
     if (this.styleReady && this.map.getLayer(LAYER_ROUTE_SELECTED)) {
       this.map.setFilter(LAYER_ROUTE_SELECTED, ['==', ['get', 'id'], this.selectedRouteId || '']);
+      this.map.setPaintProperty(LAYER_EXACT_PLACES, 'circle-color', ['case', ['==', ['get', 'id'], this.selectedPlaceId || ''], '#16324f', '#fffdf8']);
+      this.syncExactPlaces();
     }
   }
 
@@ -451,6 +506,15 @@ export class TripMap {
     const bounds = new maplibregl.LngLatBounds();
     route.geometry.coordinates.forEach(coordinate => bounds.extend(coordinate));
     this.map.fitBounds(bounds, { padding: 90, maxZoom: 10, duration: 700 });
+    return true;
+  }
+
+  focusPlace(placeId) {
+    const place = this.model.exactPlaces.find(item => item.id === placeId);
+    if (!place) return false;
+    this.hasInitialFit = true;
+    this.setSelection({ visitId: place.visitIds[0] || null, routeId: null, placeId });
+    this.map.easeTo({ center: place.coordinates, zoom: Math.max(this.map.getZoom(), 14), duration: 700 });
     return true;
   }
 

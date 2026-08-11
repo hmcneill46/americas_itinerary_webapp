@@ -13,6 +13,7 @@ export function validItinerarySnapshot(value) {
     && Array.isArray(value.events)
     && Array.isArray(value.bookings)
     && value.locations && typeof value.locations === 'object'
+    && (value.schema_version < 9 || (value.places && typeof value.places === 'object'))
     && value.budget && typeof value.budget === 'object');
 }
 

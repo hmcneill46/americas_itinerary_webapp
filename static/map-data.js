@@ -1,3 +1,5 @@
+import { placeCoordinates } from './places.js?v=places-v1';
+
 const DAY_MS = 86_400_000;
 const ROUTE_CATEGORIES = new Set(['Travel', 'Hike']);
 
@@ -118,6 +120,8 @@ function routeRecord({ id, order, from, to, event, visit, inferred }) {
     visitId: visit?.id || event?.visit_id || null,
     fromLocationId: from.id,
     toLocationId: to.id,
+    fromPlaceId: event?.from_place_id || '',
+    toPlaceId: event?.to_place_id || '',
     fromName: from.name,
     toName: to.name,
     mode,
@@ -137,6 +141,7 @@ export function buildTripMapModel(itinerary) {
   const visits = Array.isArray(itinerary?.visits) ? [...itinerary.visits].sort((a, b) => Number(a.order) - Number(b.order)) : [];
   const events = Array.isArray(itinerary?.events) ? itinerary.events : [];
   const bookings = Array.isArray(itinerary?.bookings) ? itinerary.bookings : [];
+  const places = itinerary?.places && typeof itinerary.places === 'object' ? itinerary.places : {};
   const mappedVisits = [];
   const visitLocationCounts = new Map();
 
@@ -231,15 +236,42 @@ export function buildTripMapModel(itinerary) {
       coordinates: locationPoint(location),
     }));
 
+  const exactPlaces = Object.values(places).map(place => {
+    const coordinates = placeCoordinates(place);
+    if (!coordinates) return null;
+    const placeEvents = events.filter(event => [event.place_id, event.from_place_id, event.to_place_id].includes(place.id));
+    const placeBookings = bookings.filter(booking => booking.place_id === place.id);
+    const visitIds = new Set([
+      ...placeEvents.map(event => event.visit_id),
+      ...placeBookings.map(booking => booking.visit_id),
+      ...visits.filter(visit => visit.location_id === place.location_id
+        && (placeEvents.some(event => event.start.slice(0, 10) >= visit.start_date && event.start.slice(0, 10) <= visit.end_date)
+          || placeBookings.some(booking => booking.date && booking.date >= visit.start_date && booking.date <= visit.end_date))).map(visit => visit.id),
+    ].filter(Boolean));
+    const location = locations[place.location_id];
+    return {
+      id: place.id, name: place.name, type: place.type, address: place.address || '', website: place.website || '', notes: place.notes || '',
+      locationId: place.location_id, locationName: location?.name || place.location_id, country: location?.country || '', coordinates,
+      visitIds: [...visitIds], eventIds: placeEvents.map(event => event.id), bookingIds: placeBookings.map(booking => booking.id),
+    };
+  }).filter(Boolean);
+
   return {
     visits: mappedVisits,
     routes,
     secondaryLocations,
+    exactPlaces,
     coordinates: [
       ...mappedVisits.map(visit => visit.coordinates),
       ...secondaryLocations.map(location => location.coordinates),
     ],
   };
+}
+
+export function contextualExactPlaces(model, { visitId = '', routeId = '', placeId = '' } = {}) {
+  const route = (model?.routes || []).find(item => item.id === routeId || item.eventId === routeId);
+  const endpointIds = new Set([route?.fromPlaceId, route?.toPlaceId, placeId].filter(Boolean));
+  return (model?.exactPlaces || []).filter(place => endpointIds.has(place.id) || (visitId && place.visitIds.includes(visitId)));
 }
 
 export function buildLocationMarkerGroups(model) {

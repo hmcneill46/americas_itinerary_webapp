@@ -544,3 +544,13 @@ body.map-expanded-open { overflow: hidden; }
 .booking-home-currency .linkish-button{font-size:10px}
 .money-preview{display:block;color:#506b78;font-size:10px;font-weight:650;line-height:1.35;text-transform:none;letter-spacing:normal}
 @media(max-width:720px){.booking-card-actions{flex-wrap:wrap}.booking-card-actions>*{flex:1 1 42%}.booking-finance{grid-template-columns:1fr;gap:7px}}
+
+/* Schema-v9 exact places, practical travel details, and estimate ranges. */
+.exact-place-detail{margin:9px 0;padding:9px 10px;border:1px solid #dce7ea;border-radius:9px;background:#f7fafb}
+.exact-place-detail strong,.exact-place-detail span,.exact-place-detail address{display:block}
+.exact-place-detail strong{color:var(--navy);font-size:11px}.exact-place-detail span{margin-top:2px;color:#607681;font-size:9px;font-weight:800;text-transform:uppercase}
+.exact-place-detail address,.today-address{margin:4px 0 0;color:var(--muted);font-size:10px;font-style:normal;line-height:1.4;overflow-wrap:anywhere}
+.logistics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;margin:10px 0;padding:10px;border-radius:9px;background:#f3f7f8}
+.logistics-grid div{min-width:0}.logistics-grid small,.logistics-grid strong{display:block}.logistics-grid small{color:var(--muted);font-size:8px;font-weight:800;text-transform:uppercase}.logistics-grid strong{margin-top:2px;color:var(--ink);font-size:10px;overflow-wrap:anywhere}
+.planning-range-preview{min-height:18px;color:#506b78;font-size:10px;font-weight:650;line-height:1.4}
+@media(max-width:720px){.logistics-grid{grid-template-columns:1fr}.exact-place-detail{padding:10px}.today-event .exact-place-detail{margin-inline:0}}

@@ -1,10 +1,11 @@
 import { loadMapConfig } from './map-config.js?v=map-marker-anchor-1';
-import { buildTripMapModel, buildVisitPlanSummary, routeForDay } from './map-data.js?v=map-visit-plans-1';
-import { TripMap } from './map-view.js?v=map-marker-anchor-1';
-import { calculateBudget, changeBudgetBaseCurrency, decimalCompare, formatMoney, itemExpected, presentNativeAndHome, visitQuantity } from './budget.js?v=budget-v8';
+import { buildTripMapModel, buildVisitPlanSummary, routeForDay } from './map-data.js?v=map-places-v1';
+import { TripMap } from './map-view.js?v=map-places-v1';
+import { calculateBudget, changeBudgetBaseCurrency, decimalCompare, formatMoney, itemExpected, itemPlanningRange, presentNativeAndHome, presentNativeAndHomeRange, visitQuantity } from './budget.js?v=budget-v9';
 import { deriveBookingAction, groupBookings } from './booking.js?v=booking-v2';
-import { semanticDiff } from './import-diff.js?v=import-v1';
-import { deriveToday } from './today.js?v=today-v3';
+import { semanticDiff } from './import-diff.js?v=import-v2';
+import { deriveToday } from './today.js?v=today-v4';
+import { bookingPlace, eventExactPlaces, placeById, placeReferences, placeSummary, travelLogisticsRows } from './places.js?v=places-v1';
 import { createSnapshot, readOfflineSnapshot, saveOfflineSnapshot, clearOfflineSnapshot } from './offline-store.js?v=offline-v5';
 import {
   clipFloatingIntervalToDay, derivePlacesTravelDays, filteredEvents, normaliseCategorySelection,
@@ -37,6 +38,7 @@ const state = {
   editEventId: null,
   editVisitId: null,
   editLocationId: null,
+  editPlaceId: null,
   editDayDate: '',
   routeNeedsReflow: false,
   mapController: null,
@@ -217,7 +219,7 @@ function setConnectionStatus() {
 const OFFLINE_MUTATION_SELECTORS = [
   '#save-button', '#cancel-button', '#add-cost-button', '#quick-expense-button', '#budget-settings-button',
   '#add-booking-button', '#apply-import-button', '#delete-cost-button', '#delete-event-button',
-  '#duplicate-event', '#add-event', '#add-location', '#delete-location', '#reflow-route',
+  '#duplicate-event', '#add-event', '#add-location', '#delete-location', '#add-place', '#delete-place', '#reflow-route',
   '#extend-visit-button', '#shorten-visit-button', '#handoff-import-input', '#upload-input', '#edit-token', '#validate-button',
   '#today-quick-expense', '#add-payment-button', '[data-today-event]',
   '[data-booking-action]', '[data-edit-booking]', '[data-booking-confirm]', '[data-cost-action]', '[data-edit-cost]',
@@ -596,6 +598,30 @@ function selectEvent(eventId, scroll = false, trigger = null) {
   }
 }
 
+function exactPlaceDetailHtml(label, place) {
+  if (!place) return '';
+  return `<div class="details-section exact-place-detail"><h3>${escapeHtml(label)}</h3><strong>${escapeHtml(place.name)}</strong>${place.address ? `<address>${escapeHtml(place.address)}</address>` : ''}<button type="button" class="linkish-button" data-map-place="${escapeHtml(place.id)}">${place.coordinates ? 'Show exact point on map' : 'Show parent location on map'}</button></div>`;
+}
+
+function openPlaceOnMap(placeId, preferredVisitId = '') {
+  const data = currentData(); const place = placeSummary(placeById(data, placeId), data);
+  if (!place) return;
+  if (place.coordinates) state.pendingMapFocus = { type: 'place', id: place.id };
+  else {
+    const visit = getVisit(preferredVisitId, data) || sortedVisits(data).find(item => item.location_id === place.locationId);
+    if (!visit) { toast('This place has no coordinates and no matching visit to focus.', 'info'); return; }
+    state.pendingMapFocus = { type: 'visit', id: visit.id };
+    toast(`Exact coordinates are not recorded; showing ${place.locationName}.`, 'info');
+  }
+  switchTab('map');
+}
+
+function logisticsDetailsHtml(event) {
+  const rows = travelLogisticsRows(event);
+  if (!rows.length) return '';
+  return `<div class="details-section"><h3>Travel logistics</h3><div class="logistics-grid">${rows.map(row => `<div><small>${escapeHtml(row.label)}</small><strong>${escapeHtml(row.value)}</strong></div>`).join('')}</div></div>`;
+}
+
 function eventDetailsHtml(event, data, { mobile = false } = {}) {
   const location = getLocation(event.location_id, data); const from = getLocation(event.from_location_id, data);
   const to = getLocation(event.to_location_id, data); const visit = getVisit(event.visit_id, data);
@@ -606,6 +632,7 @@ function eventDetailsHtml(event, data, { mobile = false } = {}) {
   const linkedBooking = data.bookings.find(booking => booking.event_id === event.id);
   const linkedCost = data.budget.cost_items.find(cost => cost.event_id === event.id || (linkedBooking && (cost.id === linkedBooking.cost_item_id || cost.booking_id === linkedBooking.id)));
   const linkedCostText = linkedCost ? presentNativeAndHome(itemExpected(linkedCost, data), linkedCost, data.budget.base_currency).text : '';
+  const exactPlaces = eventExactPlaces(event, data);
   const actual = event.actual_start || event.actual_end || event.outcome_note ? `<div class="details-section"><h3>What actually happened</h3><p>${event.actual_start ? `Started ${escapeHtml(humanDateTime(event.actual_start))}` : ''}${event.actual_start && event.actual_end ? '<br>' : ''}${event.actual_end ? `Ended ${escapeHtml(humanDateTime(event.actual_end))}` : ''}${event.outcome_note ? `<br>${escapeHtml(event.outcome_note)}` : ''}</p></div>` : '';
   return `<div class="details-card">
     <div class="details-heading"><div><span class="details-category ${contrastClass(colourForCategory(event.category, data))}">${escapeHtml(event.category)}</span><h2 ${mobile ? 'id="timeline-detail-title"' : ''}>${escapeHtml(event.title)}</h2></div>${mobile ? '' : '<button type="button" class="icon-button" data-close-timeline aria-label="Close event details">×</button>'}</div>
@@ -619,6 +646,7 @@ function eventDetailsHtml(event, data, { mobile = false } = {}) {
       ${(from || to) ? `<div class="detail-box"><small>Route</small><strong>${escapeHtml(from?.name || '—')} → ${escapeHtml(to?.name || '—')}</strong></div>` : ''}
       ${linkedCost ? `<div class="detail-box"><small>Expected cost</small><strong>${escapeHtml(linkedCostText)}</strong></div>` : ''}
     </div>
+    ${exactPlaceDetailHtml('Venue', exactPlaces.venue)}${exactPlaceDetailHtml('Depart from', exactPlaces.departure)}${exactPlaceDetailHtml('Arrive at', exactPlaces.arrival)}${logisticsDetailsHtml(event)}
     ${actual}${event.notes ? `<div class="details-section"><h3>Event and planning notes</h3><p>${escapeHtml(event.notes)}</p></div>` : ''}
     ${summaries ? `<div class="details-section"><h3>Daily context</h3><ul>${summaries}</ul></div>` : ''}
     <div class="details-section details-actions"><button data-detail-edit-event="${escapeHtml(event.id)}" class="primary-button">Edit this event</button>${(from && to && from.id !== to.id) ? `<button data-detail-map-event="${escapeHtml(event.id)}" class="secondary-button">Show route on map</button>` : ''}</div>
@@ -630,6 +658,7 @@ function bindEventDetailActions(container, event) {
   container.querySelector('[data-close-timeline]')?.addEventListener('click', clearTimelineSelection);
   container.querySelector('[data-detail-edit-event]')?.addEventListener('click', () => { state.editEventId = event.id; dismissMobileTimelineDetail(false); switchTab('edit'); switchEditTab('events'); renderEventEditor(); });
   container.querySelector('[data-detail-map-event]')?.addEventListener('click', () => { state.selectedDate = event.start.slice(0, 10); state.pendingMapFocus = { type: 'route', id: event.id }; dismissMobileTimelineDetail(false); switchTab('map'); });
+  container.querySelectorAll('[data-map-place]').forEach(button => button.addEventListener('click', () => { dismissMobileTimelineDetail(false); openPlaceOnMap(button.dataset.mapPlace, event.visit_id); }));
   applyReadOnlyUi();
 }
 
@@ -659,10 +688,15 @@ function placeTravelDetailsHtml(item, data, { mobile = false } = {}) {
     const visit = getVisit(item.visitId, data); const visitEvents = sortedEvents(data).filter(event => event.visit_id === item.visitId);
     const notable = visitEvents.filter(event => !event.transport_mode && !/sleep|rest|admin|meal|accommodation|travel/i.test(event.category)).slice(0, 5);
     const accommodation = data.bookings.find(booking => booking.visit_id === item.visitId && /accommodation|hostel|hotel/i.test(`${booking.type} ${booking.title}`));
+    const accommodationPlace = bookingPlace(accommodation, data);
+    const visitPlaces = Object.values(data.places || {}).filter(place => place.location_id === visit?.location_id
+      && (data.events.some(event => event.visit_id === item.visitId && [event.place_id, event.from_place_id, event.to_place_id].includes(place.id)) || accommodation?.place_id === place.id)).slice(0, 5);
     const visitBudget = calculateBudget(data).visits.find(row => row.id === item.visitId);
     return `<div class="details-card"><div class="details-heading"><div><span class="details-category">Location stay</span><h2 ${mobile ? 'id="timeline-detail-title"' : ''}>${escapeHtml(item.name)}</h2><p class="details-kicker">${escapeHtml(item.country)} · Visit ${item.order}</p></div>${mobile ? '' : '<button type="button" class="icon-button" data-close-timeline aria-label="Close stay details">×</button>'}</div>
       <div class="details-time"><strong>${humanDate(item.start)} – ${humanDate(item.end)}</strong><span>${item.days} day${item.days === 1 ? '' : 's'} · ${Math.max(0, item.days - 1)} night${item.days === 2 ? '' : 's'}</span></div>
       <div class="details-grid"><div class="detail-box"><small>Accommodation</small><strong>${escapeHtml(accommodation?.title || 'Not identified')}</strong></div><div class="detail-box"><small>Booking</small><strong>${escapeHtml(accommodation?.lifecycle?.replaceAll('_', ' ') || 'No linked booking')}</strong></div>${visitBudget ? `<div class="detail-box"><small>Expected cost</small><strong>${escapeHtml(formatMoney(visitBudget.expected, data.budget.base_currency))}</strong></div>` : ''}<div class="detail-box"><small>Arrival</small><strong>${escapeHtml(visit?.arrival_mode || 'Not specified')}</strong></div></div>
+      ${exactPlaceDetailHtml('Where you are staying', accommodationPlace)}
+      ${visitPlaces.length ? `<div class="details-section"><h3>Exact places</h3><ul>${visitPlaces.map(place => `<li><strong>${escapeHtml(place.name)}</strong>${place.address ? ` · ${escapeHtml(place.address)}` : ''}</li>`).join('')}</ul></div>` : ''}
       ${visit?.notes ? `<div class="details-section"><h3>Visit notes</h3><p>${escapeHtml(visit.notes)}</p></div>` : ''}
       <div class="details-section"><h3>Planned highlights</h3>${notable.length ? `<ul>${notable.map(event => `<li>${escapeHtml(event.title)} · ${escapeHtml(humanDate(event.start.slice(0, 10), { year: false }))}</li>`).join('')}</ul>` : '<p>No activity highlights identified.</p>'}</div>
       <div class="details-section details-actions"><button class="secondary-button" data-place-map-visit="${escapeHtml(item.visitId)}">Show on map</button></div></div>`;
@@ -682,9 +716,11 @@ function placeTravelDetailsHtml(item, data, { mobile = false } = {}) {
   const actual = item.actualStart || item.actualEnd ? `<div class="details-section"><h3>Actual journey</h3><p>${item.actualStart ? `Departed ${escapeHtml(humanDateTime(item.actualStart))}` : ''}${item.actualStart && item.actualEnd ? '<br>' : ''}${item.actualEnd ? `Arrived ${escapeHtml(humanDateTime(item.actualEnd))}` : ''}</p></div>` : '';
   const timing = item.timed ? `<strong>${humanDateTime(item.start)}</strong><span>until ${humanDateTime(item.end)}</span>` : `<strong>Timing not recorded</strong>${item.estimatedDurationHours ? `<span>Estimated duration: ${escapeHtml(item.estimatedDurationHours)} hours</span>` : '<span>Arrival method is known, but no exact time is stored.</span>'}`;
   const costText = cost ? presentNativeAndHome(itemExpected(cost, data), cost, data.budget.base_currency).text : '';
+  const exactPlaces = event ? eventExactPlaces(event, data) : { departure: null, arrival: null };
   return `<div class="details-card"><div class="details-heading"><div><span class="details-category">${escapeHtml(item.mode)}</span><h2 ${mobile ? 'id="timeline-detail-title"' : ''}>${escapeHtml(item.from)} → ${escapeHtml(item.to)}</h2><p class="details-kicker">${item.estimated ? 'Estimated from visit arrival information' : escapeHtml(item.title)}</p></div>${mobile ? '' : '<button type="button" class="icon-button" data-close-timeline aria-label="Close journey details">×</button>'}</div>
     <div class="details-time">${timing}</div>
     <div class="details-grid"><div class="detail-box"><small>Mode</small><strong>${escapeHtml(item.mode)}</strong></div><div class="detail-box"><small>Outcome</small><strong>${escapeHtml(String(item.outcome).replaceAll('_', ' '))}</strong></div><div class="detail-box"><small>Provider</small><strong>${escapeHtml(booking?.provider || 'Not recorded')}</strong></div><div class="detail-box"><small>Reference</small><strong>${escapeHtml(booking?.reference || 'Not recorded')}</strong></div>${cost ? `<div class="detail-box"><small>Expected cost</small><strong>${escapeHtml(costText)}</strong></div>` : ''}</div>
+    ${exactPlaceDetailHtml('Depart from', exactPlaces.departure)}${exactPlaceDetailHtml('Arrive at', exactPlaces.arrival)}${event ? logisticsDetailsHtml(event) : ''}
     ${actual}${event?.outcome_note || event?.notes ? `<div class="details-section"><h3>Journey notes</h3><p>${escapeHtml(event.outcome_note || event.notes)}</p></div>` : ''}
     <div class="details-section details-actions">${item.eventId ? `<button class="secondary-button" data-place-map-event="${escapeHtml(item.eventId)}">Show route on map</button>` : `<button class="secondary-button" data-place-map-visit="${escapeHtml(item.visitId)}">Show destination on map</button>`}</div></div>`;
 }
@@ -693,6 +729,7 @@ function bindPlaceTravelDetailActions(container, item) {
   container.querySelector('[data-close-timeline]')?.addEventListener('click', clearTimelineSelection);
   container.querySelector('[data-place-map-visit]')?.addEventListener('click', () => { state.pendingMapFocus = { type: 'visit', id: item.visitId }; dismissMobileTimelineDetail(false); switchTab('map'); });
   container.querySelector('[data-place-map-event]')?.addEventListener('click', () => { state.pendingMapFocus = { type: 'route', id: item.eventId }; dismissMobileTimelineDetail(false); switchTab('map'); });
+  container.querySelectorAll('[data-map-place]').forEach(button => button.addEventListener('click', () => { dismissMobileTimelineDetail(false); openPlaceOnMap(button.dataset.mapPlace, item.visitId); }));
 }
 
 function selectPlaceTravelItem(id, trigger = null, model = derivePlacesTravelDays(currentData())) {
@@ -894,6 +931,10 @@ function renderMapRouteCard(route) {
   const event = route.eventId ? data.events.find(item => item.id === route.eventId) : null;
   const booking = event ? data.bookings.find(item => item.event_id === event.id) : null;
   const cost = event ? data.budget.cost_items.find(item => item.event_id === event.id || (booking && (item.id === booking.cost_item_id || item.booking_id === booking.id))) : null;
+  const exactPlaces = event ? eventExactPlaces(event, data) : { departure: null, arrival: null };
+  if (exactPlaces.departure) appendMapDetail(grid, 'Depart from', `${exactPlaces.departure.name}${exactPlaces.departure.address ? ` · ${exactPlaces.departure.address}` : ''}`);
+  if (exactPlaces.arrival) appendMapDetail(grid, 'Arrive at', `${exactPlaces.arrival.name}${exactPlaces.arrival.address ? ` · ${exactPlaces.arrival.address}` : ''}`);
+  for (const row of event ? travelLogisticsRows(event).slice(0, 6) : []) appendMapDetail(grid, row.label, row.value);
   if (cost) appendMapDetail(grid, 'Expected cost', presentNativeAndHome(itemExpected(cost, data), cost, data.budget.base_currency).text);
   panel.append(grid);
   const note = document.createElement('p');
@@ -925,6 +966,40 @@ function revealMapDetailsOnNarrowScreen() {
     const maximumScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
     window.scrollTo({ top: Math.min(panelTop, maximumScroll), behavior: 'auto' });
   }), 120);
+}
+
+function renderMapPlaceCard(place) {
+  const data = currentData();
+  const panel = el('map-day-card');
+  panel.replaceChildren(mapHeading(place.name, `${place.type} · ${place.locationName}${place.country ? `, ${place.country}` : ''}`, place.notes));
+  const grid = document.createElement('div'); grid.className = 'map-meta-grid';
+  appendMapDetail(grid, 'Address', place.address || 'Not recorded');
+  appendMapDetail(grid, 'Used by', `${place.eventIds.length} event${place.eventIds.length === 1 ? '' : 's'} · ${place.bookingIds.length} booking${place.bookingIds.length === 1 ? '' : 's'}`);
+  panel.append(grid);
+  const relatedEvents = data.events.filter(item => place.eventIds.includes(item.id)).sort((a, b) => parseFloating(a.start) - parseFloating(b.start));
+  const relatedBookings = data.bookings.filter(item => place.bookingIds.includes(item.id));
+  if (relatedEvents.length || relatedBookings.length) {
+    const section = document.createElement('section'); section.className = 'map-visit-plans';
+    const heading = document.createElement('h3'); heading.textContent = 'Trip context'; section.append(heading);
+    const list = document.createElement('ul');
+    for (const item of relatedEvents.slice(0, 5)) { const row = document.createElement('li'); row.textContent = `${humanDate(item.start.slice(0, 10), { year: false })} · ${humanTime(item.start)} — ${item.title}`; list.append(row); }
+    for (const item of relatedBookings.slice(0, 3)) { const row = document.createElement('li'); row.textContent = `${item.title} · ${item.lifecycle.replaceAll('_', ' ')}`; list.append(row); }
+    section.append(list); panel.append(section);
+  }
+  if (place.website && /^https?:\/\//i.test(place.website)) {
+    const link = document.createElement('a'); link.className = 'secondary-button link-button map-open-button'; link.href = place.website;
+    link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open place website'; panel.append(link);
+  }
+  const event = relatedEvents[0];
+  if (event) {
+    const open = document.createElement('button'); open.type = 'button'; open.className = 'secondary-button map-open-button'; open.textContent = 'Open related event';
+    open.addEventListener('click', () => { state.selectedDate = event.start.slice(0, 10); state.selectedEventId = event.id; switchTab('day'); selectEvent(event.id, true); }); panel.append(open);
+  }
+}
+
+function selectMapPlace(place) {
+  state.mapController?.setSelection({ placeId: place.id, visitId: place.visitIds[0] || null, routeId: null });
+  renderMapPlaceCard(place); revealMapDetailsOnNarrowScreen();
 }
 
 function selectMapVisit(visit) {
@@ -959,6 +1034,7 @@ async function ensureTripMap() {
       config,
       onVisitSelect: selectMapVisit,
       onRouteSelect: selectMapRoute,
+      onPlaceSelect: selectMapPlace,
       onSecondarySelect: location => {
         const panel = el('map-day-card');
         panel.replaceChildren(mapHeading(location.name, `${location.country} · Secondary itinerary location`, 'Referenced by an event but not used as a primary visit destination.'));
@@ -991,6 +1067,7 @@ async function renderMap() {
     state.pendingMapFocus = null;
     if (pending?.type === 'route') controller.focusRoute(pending.id);
     if (pending?.type === 'visit') controller.focusVisit(pending.id);
+    if (pending?.type === 'place') controller.focusPlace(pending.id);
   } catch {
     el('map-status').hidden = false;
     el('map-status').className = 'map-status error';
@@ -1083,7 +1160,9 @@ function renderBudget() {
   const items = displayed.length ? displayed.map(item => {
     const category = data.budget.categories.find(candidate => candidate.id === item.category_id);
     const baseAmount = item.base ? formatMoney(item.base.expected, baseCurrency) : 'FX needed';
-    const native = `${formatMoney(item.expectedAmount, item.currency)} expected`;
+    const range = itemPlanningRange(item, data);
+    const rangeText = range ? presentNativeAndHomeRange(range.lowAmount, range.highAmount, item, baseCurrency).text : '';
+    const native = `${formatMoney(item.expectedAmount, item.currency)} expected${range ? ` · likely ${rangeText} · ${range.confidence} confidence` : ''}`;
     const paid = `${formatMoney(item.paidAmount, item.currency)} paid`;
     const quantity = visitQuantity(item, data);
     const basis = item.expected.basis === 'fixed' ? 'Fixed' : `${formatMoney(item.expected.unit_amount, item.currency)} ${item.expected.basis.replace('_', ' ')} × ${quantity} = ${formatMoney(item.expectedAmount, item.currency)}`;
@@ -1105,6 +1184,7 @@ function budgetOptions(items, selected, blankLabel = '—') { return `<option va
 
 function renderCostPayments() {
   const item = state.costDialogItem;
+  item.planning_range ||= { low_unit_amount: '', high_unit_amount: '', confidence: 'unknown', note: '' };
   el('cost-payments-list').innerHTML = item.payments.length ? item.payments.map(payment => `<div class="payment-row"><span><strong>${escapeHtml(payment.kind)}</strong> · ${escapeHtml(payment.date || 'No date')}<small>${escapeHtml(payment.note || '')}</small></span><span>${escapeHtml(formatMoney(payment.amount, item.currency))} <button type="button" class="linkish-button" data-remove-payment="${escapeHtml(payment.id)}">Remove</button></span></div>`).join('') : '<div class="payment-row"><span><small>No payments recorded yet.</small></span></div>';
   document.querySelectorAll('[data-remove-payment]').forEach(button => button.addEventListener('click', () => { item.payments = item.payments.filter(payment => payment.id !== button.dataset.removePayment); renderCostPayments(); }));
 }
@@ -1114,10 +1194,23 @@ function updateCostExpectedPreview() {
   try { el('cost-expected-preview').textContent = basis === 'fixed' ? `Expected total: ${formatMoney(unit, el('cost-currency').value.toUpperCase() || '???')}` : `Expected: ${formatMoney(unit, el('cost-currency').value.toUpperCase() || '???')} × ${quantity}`; } catch { el('cost-expected-preview').textContent = 'Enter an exact decimal amount.'; }
 }
 
+function updateCostRangePreview() {
+  const low = el('cost-range-low').value.trim(); const high = el('cost-range-high').value.trim(); const preview = el('cost-range-preview');
+  if (!low && !high) { preview.textContent = 'Expected remains the authoritative point estimate; this range is supplementary.'; return; }
+  if (!low || !high) { preview.textContent = 'Enter both low and high unit amounts.'; return; }
+  try {
+    const basis = el('cost-basis').value; const source = el('cost-quantity-source').value;
+    const item = { currency: el('cost-currency').value.toUpperCase() || '???', expected: { unit_amount: el('cost-unit-amount').value || '0', basis, quantity_source: basis === 'fixed' ? 'manual' : source, quantity: basis === 'fixed' ? 1 : Number(el('cost-quantity').value || 0) }, planning_range: { low_unit_amount: low, high_unit_amount: high, confidence: el('cost-range-confidence').value, note: '' }, visit_id: el('cost-visit').value, fx: { rate_to_base: el('cost-fx-rate').value.trim() } };
+    const range = itemPlanningRange(item, currentData()); const display = presentNativeAndHomeRange(range.lowAmount, range.highAmount, item, currentData().budget.base_currency);
+    preview.textContent = `Likely total range: ${display.text} · ${item.planning_range.confidence} confidence`;
+  } catch { preview.textContent = 'Enter valid exact decimal range amounts.'; }
+}
+
 function openCostDialog(existing = null, { focusFx = false } = {}) {
   const data = currentData(); const budget = data.budget;
-  state.costDialogItem = deepClone(existing || { id: '', name: '', category_id: budget.categories[0]?.id || 'miscellaneous', currency: budget.base_currency, expected: { unit_amount: '', basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '0', fx: { rate_to_base: budget.base_currency === 'USD' ? '1' : '', as_of_date: '', source: '', note: '' }, payments: [], visit_id: '', event_id: '', booking_id: '', location_id: '', start_date: '', end_date: '', notes: '' });
+  state.costDialogItem = deepClone(existing || { id: '', name: '', category_id: budget.categories[0]?.id || 'miscellaneous', currency: budget.base_currency, expected: { unit_amount: '', basis: 'fixed', quantity_source: 'manual', quantity: 1 }, planning_range: { low_unit_amount: '', high_unit_amount: '', confidence: 'unknown', note: '' }, committed_amount: '0', fx: { rate_to_base: budget.base_currency === 'USD' ? '1' : '', as_of_date: '', source: '', note: '' }, payments: [], visit_id: '', event_id: '', booking_id: '', location_id: '', start_date: '', end_date: '', notes: '' });
   const item = state.costDialogItem;
+  item.planning_range ||= { low_unit_amount: '', high_unit_amount: '', confidence: 'unknown', note: '' };
   el('cost-dialog-title').textContent = existing ? 'Edit cost item' : 'Add cost item';
   let fxNote = el('cost-fx-note');
   if (!fxNote) {
@@ -1128,16 +1221,26 @@ function openCostDialog(existing = null, { focusFx = false } = {}) {
   const rateLabel = el('cost-fx-rate').closest('label');
   if (rateLabel?.firstChild) rateLabel.firstChild.textContent = `Rate to ${budget.base_currency} home currency`;
   el('cost-id').value = item.id; el('cost-name').value = item.name; el('cost-currency').value = item.currency; el('cost-unit-amount').value = item.expected.unit_amount; el('cost-basis').value = item.expected.basis; el('cost-quantity-source').value = item.expected.quantity_source; el('cost-quantity').value = item.expected.quantity; el('cost-committed').value = item.committed_amount; el('cost-fx-rate').value = item.fx.rate_to_base; el('cost-fx-date').value = item.fx.as_of_date; el('cost-fx-source').value = item.fx.source; fxNote.value = item.fx.note || ''; el('cost-notes').value = item.notes; el('cost-start-date').value = item.start_date; el('cost-end-date').value = item.end_date;
+  el('cost-range-low').value = item.planning_range.low_unit_amount; el('cost-range-high').value = item.planning_range.high_unit_amount; el('cost-range-confidence').value = item.planning_range.confidence; el('cost-range-note').value = item.planning_range.note;
   refreshSelectOptions(el('cost-category'), budget.categories.map(category => ({ value: category.id, label: category.name })), item.category_id);
   el('cost-visit').innerHTML = budgetOptions(sortedVisits(data).map(visit => ({ id: visit.id, label: `Visit ${visit.order} · ${getLocation(visit.location_id, data)?.name || visit.location_id}` })), item.visit_id); el('cost-event').innerHTML = budgetOptions(sortedEvents(data).map(event => ({ id: event.id, label: event.title })), item.event_id); el('cost-booking').innerHTML = budgetOptions(data.bookings.map(booking => ({ id: booking.id, label: booking.title })), item.booking_id); el('cost-location').innerHTML = budgetOptions(Object.values(data.locations).map(location => ({ id: location.id, label: `${location.name} · ${location.country}` })), item.location_id);
   el('delete-cost-button').hidden = !existing; el('cost-quantity').disabled = item.expected.quantity_source !== 'manual';
-  renderCostPayments(); updateCostExpectedPreview(); el('cost-dialog').showModal();
+  renderCostPayments(); updateCostExpectedPreview(); updateCostRangePreview(); el('cost-dialog').showModal();
   if (focusFx) requestAnimationFrame(() => { el('cost-fx-rate').scrollIntoView({ block: 'center' }); el('cost-fx-rate').focus(); });
 }
 
 function applyCostDialog() {
   const item = state.costDialogItem; const data = state.draft; const source = el('cost-quantity-source').value; const basis = el('cost-basis').value;
+  const low = el('cost-range-low').value.trim(); const high = el('cost-range-high').value.trim(); const point = el('cost-unit-amount').value.trim();
+  if (Boolean(low) !== Boolean(high)) { toast('Enter both a low and high planning amount, or leave both blank.', 'error'); return; }
+  if (low) {
+    const exactAmount = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+    if (![low, high, point].every(value => exactAmount.test(value))) { toast('Planning range amounts must be non-negative exact decimals.', 'error'); return; }
+    if (decimalCompare(low, high) > 0) { toast('The likely low amount cannot exceed the high amount.', 'error'); return; }
+    if (decimalCompare(point, low) < 0 || decimalCompare(point, high) > 0) { toast('The expected unit amount must fall within the likely range.', 'error'); return; }
+  }
   item.id = el('cost-id').value || generateId('cost'); item.name = el('cost-name').value.trim(); item.category_id = el('cost-category').value; item.currency = el('cost-currency').value.trim().toUpperCase(); item.expected = { unit_amount: el('cost-unit-amount').value.trim(), basis, quantity_source: basis === 'fixed' ? 'manual' : source, quantity: basis === 'fixed' ? 1 : source === 'manual' ? Number(el('cost-quantity').value) : 0 }; item.committed_amount = el('cost-committed').value.trim() || '0'; item.fx = { rate_to_base: el('cost-fx-rate').value.trim(), as_of_date: el('cost-fx-date').value, source: el('cost-fx-source').value.trim(), note: el('cost-fx-note')?.value.trim() || '' }; item.visit_id = el('cost-visit').value; item.event_id = el('cost-event').value; item.booking_id = el('cost-booking').value; item.location_id = el('cost-location').value; item.start_date = el('cost-start-date').value; item.end_date = el('cost-end-date').value; item.notes = el('cost-notes').value.trim();
+  item.planning_range = { low_unit_amount: low, high_unit_amount: high, confidence: el('cost-range-confidence').value, note: el('cost-range-note').value.trim() };
   const index = data.budget.cost_items.findIndex(candidate => candidate.id === item.id); if (index === -1) data.budget.cost_items.push(item); else data.budget.cost_items[index] = item;
   el('cost-dialog').close(); markDirty(`Budget cost changed: ${item.name || 'new item'}`); renderBudget();
 }
@@ -1150,7 +1253,7 @@ function addDialogPayment() {
 
 function recordQuickExpense() {
   const data = state.draft; const amount = el('quick-expense-amount').value.trim(); const currency = el('quick-expense-currency').value.trim().toUpperCase(); const visitId = el('quick-expense-visit').value; const visit = getVisit(visitId, data);
-  const item = { id: generateId('cost'), name: el('quick-expense-name').value.trim(), category_id: el('quick-expense-category').value, currency, expected: { unit_amount: amount, basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '0', fx: { rate_to_base: currency === data.budget.base_currency ? '1' : '', as_of_date: el('quick-expense-date').value, source: '', note: '' }, payments: [{ id: generateId('payment'), kind: 'payment', amount, date: el('quick-expense-date').value, note: el('quick-expense-note').value.trim() }], visit_id: visitId, event_id: '', booking_id: '', location_id: visit?.location_id || '', start_date: el('quick-expense-date').value, end_date: el('quick-expense-date').value, notes: 'Quick actual expense.' };
+  const item = { id: generateId('cost'), name: el('quick-expense-name').value.trim(), category_id: el('quick-expense-category').value, currency, expected: { unit_amount: amount, basis: 'fixed', quantity_source: 'manual', quantity: 1 }, planning_range: { low_unit_amount: '', high_unit_amount: '', confidence: 'unknown', note: '' }, committed_amount: '0', fx: { rate_to_base: currency === data.budget.base_currency ? '1' : '', as_of_date: el('quick-expense-date').value, source: '', note: '' }, payments: [{ id: generateId('payment'), kind: 'payment', amount, date: el('quick-expense-date').value, note: el('quick-expense-note').value.trim() }], visit_id: visitId, event_id: '', booking_id: '', location_id: visit?.location_id || '', start_date: el('quick-expense-date').value, end_date: el('quick-expense-date').value, notes: 'Quick actual expense.' };
   data.budget.cost_items.push(item); el('quick-expense-dialog').close(); markDirty(`Recorded expense: ${item.name}`); renderBudget();
 }
 
@@ -1194,12 +1297,15 @@ function bookingCard({ booking, action }, data) {
   const cost = bookingCost(booking, data); const budgetItem = cost ? calculateBudget(data).items.find(item => item.id === cost.id) : null;
   const money = amount => presentNativeAndHome(amount, cost, data.budget.base_currency);
   const financialValues = cost ? [money(itemExpected(cost, data)), money(cost.committed_amount), money(budgetItem?.paidAmount || '0')] : [];
-  const financial = cost ? `<div class="booking-finance"><span>Expected <strong>${escapeHtml(financialValues[0].text)}</strong></span><span>Committed <strong>${escapeHtml(financialValues[1].text)}</strong></span><span>Paid <strong>${escapeHtml(financialValues[2].text)}</strong></span></div>` : '';
+  const range = cost ? itemPlanningRange(cost, data) : null;
+  const rangeText = range ? presentNativeAndHomeRange(range.lowAmount, range.highAmount, cost, data.budget.base_currency).text : '';
+  const financial = cost ? `<div class="booking-finance"><span>Expected <strong>${escapeHtml(financialValues[0].text)}</strong>${range ? `<small>Likely ${escapeHtml(rangeText)} · ${escapeHtml(range.confidence)} confidence</small>` : ''}</span><span>Committed <strong>${escapeHtml(financialValues[1].text)}</strong></span><span>Paid <strong>${escapeHtml(financialValues[2].text)}</strong></span></div>` : '';
+  const exactPlace = bookingPlace(booking, data);
   const addFx = cost && financialValues.some(value => value.needsFx) ? `<button class="linkish-button" data-booking-add-fx="${escapeHtml(cost.id)}">Add FX</button>` : '';
   const reasons = action.reasons.length ? action.reasons.slice(0, 2).map(reason => `<span class="booking-reason">${escapeHtml(reason)}</span>`).join('') : '<span class="booking-reason subdued">No timing advice recorded</span>';
   const actionButton = action.actionable ? `<button class="primary-button small" data-booking-confirm="${escapeHtml(booking.id)}">${booking.lifecycle === 'ready_to_book' ? 'Mark booked' : 'Update'}</button>` : '';
   const safeUrl = /^https?:\/\//i.test(booking.url || '') ? `<a class="linkish-button" href="${escapeHtml(booking.url)}" target="_blank" rel="noopener noreferrer">Provider ↗</a>` : '';
-  return `<article class="booking-card ${action.bucket}"><div class="booking-card-main"><div class="booking-card-heading"><div><span class="booking-type">${escapeHtml(booking.type)}</span><h3>${escapeHtml(booking.title)}</h3><p>${escapeHtml(bookingReference(booking, data))}</p></div><span class="booking-lifecycle ${escapeHtml(booking.lifecycle)}">${escapeHtml(booking.lifecycle.replaceAll('_', ' '))}</span></div><div class="booking-timing"><strong>${escapeHtml(action.timingLabel)}</strong><div>${reasons}</div></div>${financial}</div><div class="booking-card-actions">${actionButton}<button class="secondary-button small" data-edit-booking="${escapeHtml(booking.id)}">Details</button>${addFx}${safeUrl}</div></article>`;
+  return `<article class="booking-card ${action.bucket}"><div class="booking-card-main"><div class="booking-card-heading"><div><span class="booking-type">${escapeHtml(booking.type)}</span><h3>${escapeHtml(booking.title)}</h3><p>${escapeHtml(bookingReference(booking, data))}${exactPlace ? `<br><strong>${escapeHtml(exactPlace.name)}</strong>${exactPlace.address ? ` · ${escapeHtml(exactPlace.address)}` : ''}` : ''}</p></div><span class="booking-lifecycle ${escapeHtml(booking.lifecycle)}">${escapeHtml(booking.lifecycle.replaceAll('_', ' '))}</span></div><div class="booking-timing"><strong>${escapeHtml(action.timingLabel)}</strong><div>${reasons}</div></div>${financial}</div><div class="booking-card-actions">${actionButton}<button class="secondary-button small" data-edit-booking="${escapeHtml(booking.id)}">Details</button>${exactPlace ? `<button class="linkish-button" data-booking-map-place="${escapeHtml(exactPlace.id)}" data-booking-visit="${escapeHtml(booking.visit_id || '')}">Map</button>` : ''}${addFx}${safeUrl}</div></article>`;
 }
 function renderBookings() {
   const data = currentData(); if (!data) return;
@@ -1220,9 +1326,10 @@ function renderBookings() {
   document.querySelectorAll('[data-edit-booking]').forEach(button => button.addEventListener('click', () => openBookingDialog(data.bookings.find(item => item.id === button.dataset.editBooking))));
   document.querySelectorAll('[data-booking-confirm]').forEach(button => button.addEventListener('click', () => openBookingDialog(data.bookings.find(item => item.id === button.dataset.bookingConfirm), true)));
   document.querySelectorAll('[data-booking-add-fx]').forEach(button => button.addEventListener('click', () => openCostDialog(data.budget.cost_items.find(item => item.id === button.dataset.bookingAddFx), { focusFx: true })));
+  document.querySelectorAll('[data-booking-map-place]').forEach(button => button.addEventListener('click', () => openPlaceOnMap(button.dataset.bookingMapPlace, button.dataset.bookingVisit)));
   document.querySelector('[data-booking-budget-settings]')?.addEventListener('click', openBudgetSettings);
 }
-function defaultBooking(data) { return { id: '', title: '', type: 'Other', lifecycle: 'not_researched', timing: { strategy: 'unknown', recommended_date: '', lead_days: 0, anchor: 'event_start', hard_deadline: '', sell_out_risk: 'unknown', price_rise_risk: 'unknown', flexibility_value: 'unknown', rationale: '', confidence: 'unknown', last_researched_date: '', source_urls: [] }, date: '', time: '', duration: '', booking_deadline: '', details: '', provider: '', reference: '', url: '', notes: '', event_id: '', visit_id: '', location_id: '', cost_item_id: '', legacy: {} }; }
+function defaultBooking(data) { return { id: '', title: '', type: 'Other', lifecycle: 'not_researched', timing: { strategy: 'unknown', recommended_date: '', lead_days: 0, anchor: 'event_start', hard_deadline: '', sell_out_risk: 'unknown', price_rise_risk: 'unknown', flexibility_value: 'unknown', rationale: '', confidence: 'unknown', last_researched_date: '', source_urls: [] }, date: '', time: '', duration: '', booking_deadline: '', details: '', provider: '', reference: '', url: '', notes: '', event_id: '', visit_id: '', location_id: '', place_id: '', cost_item_id: '', legacy: {} }; }
 function updateBookingMoneyPreviews() {
   const data = currentData(); const cost = data?.budget?.cost_items?.find(item => item.id === el('booking-cost').value);
   for (const [inputId, previewId] of [['booking-committed', 'booking-committed-preview'], ['booking-deposit', 'booking-deposit-preview']]) {
@@ -1236,21 +1343,36 @@ function updateBookingMoneyPreviews() {
     } catch { preview.textContent = 'Enter an exact decimal amount.'; }
   }
 }
+function ensureBookingPlaceField() {
+  let select = el('booking-place');
+  if (select) return select;
+  const label = document.createElement('label'); label.className = 'span-2'; label.append('Exact place / venue');
+  select = document.createElement('select'); select.id = 'booking-place'; label.append(select);
+  el('booking-location').closest('label').insertAdjacentElement('afterend', label);
+  return select;
+}
 function openBookingDialog(existing = null, markBooked = false) {
   const data = currentData(); const booking = state.bookingDialogItem = deepClone(existing || defaultBooking(data)); const timing = booking.timing;
   el('booking-dialog-title').textContent = markBooked ? 'Confirm booking' : existing ? 'Edit booking' : 'Add booking';
-  for (const [id, value] of Object.entries({ 'booking-id': booking.id, 'booking-title': booking.title, 'booking-type': booking.type, 'booking-date': booking.date, 'booking-provider': booking.provider, 'booking-url': booking.url, 'booking-reference': booking.reference, 'booking-notes': booking.notes, 'booking-strategy': timing.strategy, 'booking-recommended-date': timing.recommended_date, 'booking-lead-days': timing.lead_days || '', 'booking-anchor': timing.anchor, 'booking-hard-deadline': timing.hard_deadline, 'booking-sellout-risk': timing.sell_out_risk, 'booking-price-risk': timing.price_rise_risk, 'booking-flexibility': timing.flexibility_value, 'booking-rationale': timing.rationale, 'booking-confidence': timing.confidence, 'booking-researched-date': timing.last_researched_date, 'booking-sources': timing.source_urls.join('\n') })) el(id).value = value;
+  for (const [id, value] of Object.entries({ 'booking-id': booking.id, 'booking-title': booking.title, 'booking-type': booking.type, 'booking-date': booking.date, 'booking-provider': booking.provider, 'booking-url': booking.url, 'booking-reference': booking.reference, 'booking-details': booking.details, 'booking-notes': booking.notes, 'booking-strategy': timing.strategy, 'booking-recommended-date': timing.recommended_date, 'booking-lead-days': timing.lead_days || '', 'booking-anchor': timing.anchor, 'booking-hard-deadline': timing.hard_deadline, 'booking-sellout-risk': timing.sell_out_risk, 'booking-price-risk': timing.price_rise_risk, 'booking-flexibility': timing.flexibility_value, 'booking-rationale': timing.rationale, 'booking-confidence': timing.confidence, 'booking-researched-date': timing.last_researched_date, 'booking-sources': timing.source_urls.join('\n') })) el(id).value = value;
   refreshSelectOptions(el('booking-lifecycle'), ['not_researched', 'researching', 'ready_to_book', 'booked', 'cancelled', 'not_required'].map(value => ({ value, label: value.replaceAll('_', ' ') })), markBooked ? 'booked' : booking.lifecycle);
   el('booking-visit').innerHTML = budgetOptions(sortedVisits(data).map(visit => ({ id: visit.id, label: `Visit ${visit.order} · ${getLocation(visit.location_id, data)?.name || visit.location_id}` })), booking.visit_id);
   el('booking-event').innerHTML = budgetOptions(sortedEvents(data).map(event => ({ id: event.id, label: event.title })), booking.event_id);
   el('booking-location').innerHTML = budgetOptions(Object.values(data.locations).map(location => ({ id: location.id, label: `${location.name} · ${location.country}` })), booking.location_id);
   el('booking-cost').innerHTML = budgetOptions(data.budget.cost_items.map(item => ({ id: item.id, label: `${item.name} · ${formatMoney(itemExpected(item, data), item.currency)}` })), booking.cost_item_id || data.budget.cost_items.find(item => item.booking_id === booking.id)?.id || '');
+  const placeSelect = ensureBookingPlaceField();
+  const refreshBookingPlaces = () => {
+    const locationId = el('booking-location').value;
+    placeSelect.innerHTML = budgetOptions(Object.values(data.places || {}).filter(place => !locationId || place.location_id === locationId).map(place => ({ id: place.id, label: `${place.name} · ${place.type}${place.address ? ` · ${place.address}` : ''}` })), booking.place_id);
+  };
+  refreshBookingPlaces(); el('booking-location').onchange = refreshBookingPlaces;
   const cost = bookingCost(booking, data); el('booking-committed').value = cost?.committed_amount || ''; el('booking-deposit').value = ''; el('booking-payment-date').value = bookingToday();
   el('booking-finance-fieldset').hidden = false; updateBookingMoneyPreviews(); el('booking-dialog').showModal();
 }
 function applyBookingDialog() {
   const data = state.draft; const booking = state.bookingDialogItem; const sourceUrls = el('booking-sources').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
-  Object.assign(booking, { id: el('booking-id').value || generateId('booking'), title: el('booking-title').value.trim(), type: el('booking-type').value.trim(), lifecycle: el('booking-lifecycle').value, date: el('booking-date').value, provider: el('booking-provider').value.trim(), url: el('booking-url').value.trim(), reference: el('booking-reference').value.trim(), notes: el('booking-notes').value.trim(), visit_id: el('booking-visit').value, event_id: el('booking-event').value, location_id: el('booking-location').value, cost_item_id: el('booking-cost').value, timing: { strategy: el('booking-strategy').value, recommended_date: el('booking-recommended-date').value, lead_days: Number(el('booking-lead-days').value || 0), anchor: el('booking-anchor').value, hard_deadline: el('booking-hard-deadline').value, sell_out_risk: el('booking-sellout-risk').value, price_rise_risk: el('booking-price-risk').value, flexibility_value: el('booking-flexibility').value, rationale: el('booking-rationale').value.trim(), confidence: el('booking-confidence').value, last_researched_date: el('booking-researched-date').value, source_urls: sourceUrls } });
+  Object.assign(booking, { id: el('booking-id').value || generateId('booking'), title: el('booking-title').value.trim(), type: el('booking-type').value.trim(), lifecycle: el('booking-lifecycle').value, date: el('booking-date').value, provider: el('booking-provider').value.trim(), url: el('booking-url').value.trim(), reference: el('booking-reference').value.trim(), details: el('booking-details').value.trim(), notes: el('booking-notes').value.trim(), visit_id: el('booking-visit').value, event_id: el('booking-event').value, location_id: el('booking-location').value, cost_item_id: el('booking-cost').value, timing: { strategy: el('booking-strategy').value, recommended_date: el('booking-recommended-date').value, lead_days: Number(el('booking-lead-days').value || 0), anchor: el('booking-anchor').value, hard_deadline: el('booking-hard-deadline').value, sell_out_risk: el('booking-sellout-risk').value, price_rise_risk: el('booking-price-risk').value, flexibility_value: el('booking-flexibility').value, rationale: el('booking-rationale').value.trim(), confidence: el('booking-confidence').value, last_researched_date: el('booking-researched-date').value, source_urls: sourceUrls } });
+  booking.place_id = el('booking-place').value;
   const linked = data.budget.cost_items.find(item => item.id === booking.cost_item_id); if (linked) { linked.booking_id = booking.id; const committed = el('booking-committed').value.trim(); if (booking.lifecycle === 'booked' && committed) linked.committed_amount = committed; const deposit = el('booking-deposit').value.trim(); if (deposit) linked.payments.push({ id: generateId('payment'), kind: 'payment', amount: deposit, date: el('booking-payment-date').value, note: 'Recorded while confirming booking.' }); }
   const index = data.bookings.findIndex(item => item.id === booking.id); if (index < 0) data.bookings.push(booking); else data.bookings[index] = booking;
   el('booking-dialog').close(); markDirty(`Booking changed: ${booking.title || 'new booking'}`); renderBookings();
@@ -1262,6 +1384,7 @@ function renderEditView() {
   if (state.editTab === 'events') renderEventEditor();
   if (state.editTab === 'route') renderRouteEditor();
   if (state.editTab === 'locations') renderLocationEditor();
+  if (state.editTab === 'places') renderPlaceEditor();
 }
 
 function refreshSelectOptions(select, options, selected, allowBlank = false) {
@@ -1297,6 +1420,20 @@ function renderEventEditor() {
   refreshSelectOptions(el('event-from'), locations, event.from_location_id, true);
   refreshSelectOptions(el('event-to'), locations, event.to_location_id, true);
   refreshSelectOptions(el('event-mode'), modes, event.transport_mode, true);
+  const placeOptions = locationId => Object.values(data.places || {}).filter(place => place.location_id === locationId).sort((a, b) => a.name.localeCompare(b.name)).map(place => ({ value: place.id, label: `${place.name} — ${place.type}` }));
+  const refreshPlaces = () => {
+    refreshSelectOptions(el('event-place'), placeOptions(el('event-location').value), event.place_id, true);
+    refreshSelectOptions(el('event-from-place'), placeOptions(el('event-from').value), event.from_place_id, true);
+    refreshSelectOptions(el('event-to-place'), placeOptions(el('event-to').value), event.to_place_id, true);
+  };
+  refreshPlaces();
+  ['event-location', 'event-from', 'event-to'].forEach(id => { el(id).onchange = refreshPlaces; });
+  const logistics = event.travel_logistics || {};
+  for (const [id, value] of Object.entries({ 'event-operator': logistics.operator, 'event-service-number': logistics.service_number, 'event-seat': logistics.seat, 'event-arrival-lead': logistics.recommended_arrival_lead_minutes || '', 'event-departure-terminal': logistics.departure_terminal, 'event-departure-platform': logistics.departure_platform, 'event-departure-gate': logistics.departure_gate, 'event-arrival-terminal': logistics.arrival_terminal, 'event-arrival-platform': logistics.arrival_platform, 'event-arrival-gate': logistics.arrival_gate, 'event-baggage-note': logistics.baggage_note, 'event-instructions': logistics.instructions })) el(id).value = value || '';
+  el('event-logistics-fieldset').hidden = !event.transport_mode && !['Travel', 'Hike'].includes(event.category);
+  const updateTravelDisclosure = () => { el('event-logistics-fieldset').hidden = !el('event-mode').value && !['Travel', 'Hike'].includes(el('event-category').value); };
+  el('event-category').onchange = updateTravelDisclosure;
+  el('event-mode').onchange = updateTravelDisclosure;
   el('event-locked').checked = Boolean(event.locked);
   el('event-notes').value = event.notes || '';
 }
@@ -1322,6 +1459,15 @@ function applyEventForm(eventObject = null) {
     location_id: el('event-location').value,
     from_location_id: el('event-from').value,
     to_location_id: el('event-to').value,
+    place_id: el('event-place').value,
+    from_place_id: el('event-from-place').value,
+    to_place_id: el('event-to-place').value,
+    travel_logistics: {
+      operator: el('event-operator').value.trim(), service_number: el('event-service-number').value.trim(), seat: el('event-seat').value.trim(),
+      departure_terminal: el('event-departure-terminal').value.trim(), departure_platform: el('event-departure-platform').value.trim(), departure_gate: el('event-departure-gate').value.trim(),
+      arrival_terminal: el('event-arrival-terminal').value.trim(), arrival_platform: el('event-arrival-platform').value.trim(), arrival_gate: el('event-arrival-gate').value.trim(),
+      recommended_arrival_lead_minutes: Number(el('event-arrival-lead').value || 0), baggage_note: el('event-baggage-note').value.trim(), instructions: el('event-instructions').value.trim(),
+    },
     transport_mode: el('event-mode').value,
     locked: el('event-locked').checked,
     notes: el('event-notes').value.trim(),
@@ -1337,8 +1483,10 @@ function addEvent() {
   const event = {
     id: generateId('evt'), title: 'New event', category: 'Activity',
     start: `${day.date}T09:00`, end: `${day.date}T10:00`, visit_id: day.visit_id, location_id: day.location_id,
-    from_location_id: '', to_location_id: '', transport_mode: '', confidence: day.confidence,
+    from_location_id: '', to_location_id: '', place_id: '', from_place_id: '', to_place_id: '', transport_mode: '', confidence: day.confidence,
+    travel_logistics: { operator: '', service_number: '', seat: '', departure_terminal: '', departure_platform: '', departure_gate: '', arrival_terminal: '', arrival_platform: '', arrival_gate: '', recommended_arrival_lead_minutes: 0, baggage_note: '', instructions: '' },
     notes: '', day_summaries: [day.summary], source_dates: [day.date], locked: false,
+    outcome: 'planned', actual_start: '', actual_end: '', outcome_note: '', replaces_event_id: '',
   };
   data.events.push(event);
   state.editEventId = event.id;
@@ -1417,6 +1565,9 @@ function renderVisitEditor() {
       data.events.filter(item => item.visit_id === visit.id).forEach(item => {
         item.location_id = newLocation;
         if (item.to_location_id === oldLocation || item.to_location_id === '') item.to_location_id = newLocation;
+        if (item.place_id && data.places[item.place_id]?.location_id !== item.location_id) item.place_id = '';
+        if (item.from_place_id && data.places[item.from_place_id]?.location_id !== item.from_location_id) item.from_place_id = '';
+        if (item.to_place_id && data.places[item.to_place_id]?.location_id !== item.to_location_id) item.to_place_id = '';
       });
     }
     markDirty('Visit details changed');
@@ -1466,6 +1617,8 @@ function reflowRouteDates() {
       crossLocationEvents[0].from_location_id = previousLocation;
       crossLocationEvents[0].to_location_id = visit.location_id;
       crossLocationEvents[0].transport_mode = visit.arrival_mode;
+      if (crossLocationEvents[0].from_place_id && data.places[crossLocationEvents[0].from_place_id]?.location_id !== previousLocation) crossLocationEvents[0].from_place_id = '';
+      if (crossLocationEvents[0].to_place_id && data.places[crossLocationEvents[0].to_place_id]?.location_id !== visit.location_id) crossLocationEvents[0].to_place_id = '';
     }
     previousLocation = visit.location_id;
     cursor = addDays(visit.end_date, 1);
@@ -1505,7 +1658,9 @@ function flexibleEventsForDay(day, location) {
     start: `${day.date}T${start === '24:00' ? '00:00' : start}`,
     end: end === '24:00' ? `${addDays(day.date, 1)}T00:00` : `${day.date}T${end}`,
     visit_id: day.visit_id, location_id: day.location_id, from_location_id: '', to_location_id: '', transport_mode: '',
+    place_id: '', from_place_id: '', to_place_id: '', travel_logistics: { operator: '', service_number: '', seat: '', departure_terminal: '', departure_platform: '', departure_gate: '', arrival_terminal: '', arrival_platform: '', arrival_gate: '', recommended_arrival_lead_minutes: 0, baggage_note: '', instructions: '' },
     confidence: day.confidence, notes: 'Automatically added when the visit was extended.', day_summaries: [day.summary], source_dates: [day.date], locked: false,
+    outcome: 'planned', actual_start: '', actual_end: '', outcome_note: '', replaces_event_id: '',
   }));
 }
 
@@ -1602,13 +1757,42 @@ function addLocation() {
 function deleteLocation() {
   const id = state.editLocationId;
   const data = state.draft;
-  const referenced = data.visits.some(visit => visit.location_id === id) || data.days.some(day => day.location_id === id) || data.events.some(event => [event.location_id, event.from_location_id, event.to_location_id].includes(id));
+  const referenced = data.visits.some(visit => visit.location_id === id) || data.days.some(day => day.location_id === id) || data.events.some(event => [event.location_id, event.from_location_id, event.to_location_id].includes(id)) || Object.values(data.places || {}).some(place => place.location_id === id);
   if (referenced) { toast('This location is still referenced by the route, a day or an event.', 'error'); return; }
   if (!confirm(`Delete location “${data.locations[id]?.name}”?`)) return;
   delete data.locations[id];
   state.editLocationId = Object.keys(data.locations)[0] || null;
   markDirty('Location deleted');
   renderLocationEditor();
+}
+
+function renderPlaceEditor() {
+  const data = state.draft;
+  const query = el('place-search').value.trim().toLowerCase();
+  const places = Object.values(data.places || {}).sort((a, b) => a.name.localeCompare(b.name)).filter(place => !query || `${place.name} ${place.type} ${place.address} ${place.id}`.toLowerCase().includes(query));
+  el('place-list').innerHTML = places.map(place => `<button class="editor-list-item ${place.id === state.editPlaceId ? 'active' : ''}" data-place-id="${escapeHtml(place.id)}"><strong>${escapeHtml(place.name)}</strong><small>${escapeHtml(place.type)} · ${escapeHtml(getLocation(place.location_id, data)?.name || place.location_id)}</small></button>`).join('');
+  el('place-list').querySelectorAll('[data-place-id]').forEach(item => item.addEventListener('click', () => { state.editPlaceId = item.dataset.placeId; renderPlaceEditor(); }));
+  const place = data.places?.[state.editPlaceId];
+  el('place-form-empty').classList.toggle('hidden', Boolean(place)); el('place-form').classList.toggle('hidden', !place);
+  if (!place) return;
+  el('place-id').value = place.id; el('place-id').readOnly = !place._new; el('place-name').value = place.name; el('place-type').value = place.type;
+  refreshSelectOptions(el('place-location'), Object.values(data.locations).sort((a, b) => a.name.localeCompare(b.name)).map(location => ({ value: location.id, label: `${location.name} — ${location.country}` })), place.location_id);
+  el('place-address').value = place.address || ''; el('place-latitude').value = place.coordinates?.latitude ?? ''; el('place-longitude').value = place.coordinates?.longitude ?? '';
+  el('place-website').value = place.website || ''; el('place-notes').value = place.notes || '';
+}
+
+function addPlace() {
+  const data = state.draft; let id = 'new_place'; let counter = 2; while (data.places[id]) id = `new_place_${counter++}`;
+  const locationId = Object.keys(data.locations)[0]; data.places[id] = { id, name: 'New exact place', location_id: locationId, type: 'Venue', address: '', website: '', notes: '', _new: true };
+  state.editPlaceId = id; markDirty('New exact place added'); renderPlaceEditor();
+}
+
+function deletePlace() {
+  const data = state.draft; const place = data.places?.[state.editPlaceId]; if (!place) return;
+  const references = placeReferences(data, place.id);
+  if (references.count) { toast(`This place is still referenced by ${references.events.length} event(s) and ${references.bookings.length} booking(s).`, 'error', 6000); return; }
+  if (!confirm(`Delete exact place “${place.name}”?`)) return;
+  delete data.places[place.id]; state.editPlaceId = Object.keys(data.places)[0] || null; markDirty('Exact place deleted'); renderPlaceEditor();
 }
 
 async function validateDraft(showDialog = true) {
@@ -1674,21 +1858,40 @@ function downloadDraft() {
   URL.revokeObjectURL(url);
 }
 
-/* ---------------- AI handoff / safe import ---------------- */
+/* ---------------- Today / trip mode ---------------- */
 function renderToday() {
-  const data = currentData(); const now = localNowFloating(); const model = deriveToday(data, now);
-  const eventCard = event => event ? `<article class="today-event"><span>${escapeHtml(event.outcome || 'planned')}</span><h3>${escapeHtml(event.title)}</h3><strong>${escapeHtml((event.actual_start || event.start).slice(11, 16))}–${escapeHtml((event.actual_end || event.end).slice(11, 16))}</strong><p>${escapeHtml(event.notes || '')}</p><div><button class="secondary-button small" data-today-outcome="completed" data-today-event="${escapeHtml(event.id)}">Mark completed</button><button class="secondary-button small" data-today-outcome="missed" data-today-event="${escapeHtml(event.id)}">Missed</button></div></article>` : '<article class="today-event empty"><h3>Nothing scheduled</h3><p>Enjoy the free time, or add a real-world update.</p></article>';
-  const schedule = model.events.map(event => eventCard(event)).join('') || '<div class="budget-empty">No events planned for this calendar day.</div>';
-  const tonight = model.accommodation ? `${model.accommodation.title} · ${model.accommodation.outcome || 'planned'}` : 'No accommodation identified for tonight';
-  const expectedMissing = model.money.missingFx.filter(entry => entry.expected).length;
-  const recordedMissing = model.money.missingFx.filter(entry => entry.recorded).length;
+  const data = currentData(); const model = deriveToday(data, localNowFloating());
+  const eventCard = event => {
+    if (!event) return '<article class="today-event empty"><h3>Nothing scheduled</h3><p>Enjoy the free time, or check the schedule.</p></article>';
+    const places = eventExactPlaces(event, data); const transport = event.id === model.nextTransport?.event.id ? model.nextTransport : null;
+    const booking = transport?.booking || data.bookings.find(item => item.event_id === event.id); const logistics = transport?.logistics || event.travel_logistics || {};
+    const cost = booking ? bookingCost(booking, data) : data.budget.cost_items.find(item => item.event_id === event.id);
+    const practical = [
+      places.venue ? `<p><strong>Venue:</strong> ${escapeHtml(places.venue.name)}${places.venue.address ? `<br>${escapeHtml(places.venue.address)}` : ''}</p>` : '',
+      places.departure ? `<p><strong>Depart from:</strong> ${escapeHtml(places.departure.name)}${places.departure.address ? `<br>${escapeHtml(places.departure.address)}` : ''}</p>` : '',
+      places.arrival ? `<p><strong>Arrive at:</strong> ${escapeHtml(places.arrival.name)}</p>` : '',
+      logistics.operator || logistics.service_number ? `<p><strong>${escapeHtml([logistics.operator, logistics.service_number].filter(Boolean).join(' · '))}</strong></p>` : '',
+      [logistics.departure_terminal && `Terminal ${logistics.departure_terminal}`, logistics.departure_platform && `Platform ${logistics.departure_platform}`, logistics.departure_gate && `Gate ${logistics.departure_gate}`, logistics.seat && `Seat ${logistics.seat}`].filter(Boolean).length ? `<p>${escapeHtml([logistics.departure_terminal && `Terminal ${logistics.departure_terminal}`, logistics.departure_platform && `Platform ${logistics.departure_platform}`, logistics.departure_gate && `Gate ${logistics.departure_gate}`, logistics.seat && `Seat ${logistics.seat}`].filter(Boolean).join(' · '))}</p>` : '',
+      logistics.recommended_arrival_lead_minutes ? `<p>Arrive ${escapeHtml(logistics.recommended_arrival_lead_minutes)} minutes early</p>` : '',
+      booking?.reference ? `<p><strong>Reference:</strong> ${escapeHtml(booking.reference)}</p>` : '',
+      cost ? `<p><strong>Expected:</strong> ${escapeHtml(presentNativeAndHome(itemExpected(cost, data), cost, data.budget.base_currency).text)}</p>` : '',
+    ].join('');
+    const mapPlace = places.departure || places.venue || places.arrival;
+    return `<article class="today-event"><span>${escapeHtml(event.outcome || 'planned')}</span><h3>${escapeHtml(event.title)}</h3><strong>${escapeHtml((event.actual_start || event.start).slice(11, 16))}–${escapeHtml((event.actual_end || event.end).slice(11, 16))}</strong>${practical}<p>${escapeHtml(event.notes || '')}</p><div>${mapPlace ? `<button class="secondary-button small" data-today-map-place="${escapeHtml(mapPlace.id)}" data-today-map-visit="${escapeHtml(event.visit_id)}">Show on map</button>` : ''}<button class="secondary-button small" data-today-outcome="completed" data-today-event="${escapeHtml(event.id)}">Mark completed</button><button class="secondary-button small" data-today-outcome="missed" data-today-event="${escapeHtml(event.id)}">Missed</button></div></article>`;
+  };
+  const tonight = model.tonight; const tonightTitle = tonight.booking?.title || tonight.event?.title || tonight.place?.name || 'No accommodation identified for tonight';
+  const tonightBody = tonight.event || tonight.booking ? `<article class="today-event"><h3>${escapeHtml(tonightTitle)}</h3>${tonight.place && tonight.place.name !== tonightTitle ? `<p><strong>${escapeHtml(tonight.place.name)}</strong></p>` : ''}${tonight.place?.address ? `<p class="today-address">${escapeHtml(tonight.place.address)}</p>` : ''}${tonight.booking?.reference ? `<p><strong>Reference:</strong> ${escapeHtml(tonight.booking.reference)}</p>` : ''}${tonight.booking?.time ? `<p><strong>Check-in:</strong> ${escapeHtml(tonight.booking.time)}</p>` : ''}${tonight.booking?.details ? `<p>${escapeHtml(tonight.booking.details)}</p>` : ''}${tonight.booking?.notes ? `<p>${escapeHtml(tonight.booking.notes)}</p>` : ''}${tonight.place ? `<div><button class="secondary-button small" data-today-map-place="${escapeHtml(tonight.place.id)}" data-today-map-visit="${escapeHtml(model.visit?.id || '')}">Show on map</button></div>` : ''}</article>` : `<article class="today-event empty"><h3>${escapeHtml(tonightTitle)}</h3><p>This may be intentional, but no exact stay is linked.</p></article>`;
+  const schedule = model.events.map(eventCard).join('') || '<div class="budget-empty">No events planned for this calendar day.</div>';
+  const expectedMissing = model.money.missingFx.filter(entry => entry.expected).length; const recordedMissing = model.money.missingFx.filter(entry => entry.recorded).length;
   const expectedNote = model.money.expectedComplete ? 'Applicable estimates for this calendar day.' : `Incomplete — ${expectedMissing} applicable item${expectedMissing === 1 ? '' : 's'} need FX.`;
   const recordedNote = model.money.recordedComplete ? 'Payments, refunds, and adjustments dated today.' : `Incomplete — ${recordedMissing} recorded item${recordedMissing === 1 ? '' : 's'} need FX.`;
-  el('today-content').innerHTML = `<section class="today-hero"><div><small>${escapeHtml(model.today)}</small><h2>${escapeHtml(model.day?.base || 'Outside the trip itinerary')}</h2><p>${escapeHtml(model.day ? `Day ${model.day.day_number} · ${model.day.country}` : 'Check the trip dates or choose another view.')}</p></div><button id="today-quick-expense" class="secondary-button">+ Expense</button></section><section class="today-grid"><div><h2>Now</h2>${eventCard(model.active)}</div><div><h2>Next</h2>${eventCard(model.next)}</div><div><h2>Tonight</h2><article class="today-event"><h3>${escapeHtml(tonight)}</h3></article></div><div><h2>Needs attention</h2><article class="today-event"><p>${model.attention.length ? escapeHtml(model.attention.map(item => item.booking.title).join(' · ')) : 'No urgent booking action today.'}</p></article></div></section><section class="budget-section today-schedule"><h2>Today’s schedule</h2><div class="today-money"><div class="${model.money.expectedComplete ? '' : 'incomplete'}"><small>Expected today</small><strong>${escapeHtml(formatMoney(model.money.expected, model.money.currency))}</strong><p>${escapeHtml(expectedNote)}</p></div><div class="${model.money.recordedComplete ? '' : 'incomplete'}"><small>Recorded today</small><strong>${escapeHtml(formatMoney(model.money.recorded, model.money.currency))}</strong><p>${escapeHtml(recordedNote)}</p></div></div>${schedule}</section>`;
+  el('today-content').innerHTML = `<section class="today-hero"><div><small>${escapeHtml(model.today)}</small><h2>${escapeHtml(model.day?.base || 'Outside the trip itinerary')}</h2><p>${escapeHtml(model.day ? `Day ${model.day.day_number} · ${model.day.country}` : 'Check the trip dates or choose another view.')}</p></div><button id="today-quick-expense" class="secondary-button">+ Expense</button></section><section class="today-grid"><div><h2>Now</h2>${eventCard(model.active)}</div><div><h2>Next</h2>${eventCard(model.next)}</div><div><h2>Tonight</h2>${tonightBody}</div><div><h2>Needs attention</h2><article class="today-event"><p>${model.attention.length ? escapeHtml(model.attention.map(item => item.booking.title).join(' · ')) : 'No urgent booking action today.'}</p></article></div></section><section class="budget-section today-schedule"><h2>Today’s schedule</h2><div class="today-money"><div class="${model.money.expectedComplete ? '' : 'incomplete'}"><small>Expected today</small><strong>${escapeHtml(formatMoney(model.money.expected, model.money.currency))}</strong><p>${escapeHtml(expectedNote)}</p></div><div class="${model.money.recordedComplete ? '' : 'incomplete'}"><small>Recorded today</small><strong>${escapeHtml(formatMoney(model.money.recorded, model.money.currency))}</strong><p>${escapeHtml(recordedNote)}</p></div></div>${schedule}</section>`;
   document.querySelectorAll('[data-today-event]').forEach(button => button.addEventListener('click', () => { const event = data.events.find(item => item.id === button.dataset.todayEvent); event.outcome = button.dataset.todayOutcome; event.outcome_note = button.dataset.todayOutcome === 'missed' ? 'Recorded in Today view.' : ''; markDirty(`${event.title}: ${event.outcome}`); renderToday(); }));
-  el('today-quick-expense').addEventListener('click', () => { switchTab('budget'); el('quick-expense-button').click(); });
+  document.querySelectorAll('[data-today-map-place]').forEach(button => button.addEventListener('click', () => openPlaceOnMap(button.dataset.todayMapPlace, button.dataset.todayMapVisit)));
+  el('today-quick-expense').addEventListener('click', () => { switchTab('budget'); el('quick-expense-button').click(); }); applyReadOnlyUi();
 }
-const AI_HANDOFF_TEXT = `You are modifying a Trip Planner itinerary JSON document. Return one complete valid JSON document only (not a patch or Markdown). Preserve schema_version and stable IDs whenever an entity is modified. Keep event timestamps as floating local YYYY-MM-DDTHH:MM values with no Z or UTC offset. Keep exact money and FX values as decimal strings. Preserve expected, committed and paid as distinct Budget concepts; booking lifecycle and booking timing are distinct. Do not add secrets, card data, or javascript: URLs.`;
+
+const AI_HANDOFF_TEXT = `You are modifying a complete Trip Planner schema-v9 itinerary JSON document. Return one complete valid JSON document only, never a patch or Markdown. Preserve schema_version and stable IDs. Keep broad route locations separate from exact places: use locations for cities/route stops and places for hotels, terminals, stations, attractions, trailheads, restaurants, and meeting points. Events may reference place_id plus from_place_id/to_place_id; travel_logistics stores operator, service, terminal/platform/gate, seat, arrival lead, baggage and instructions. Bookings may reference place_id. Budget expected.unit_amount remains the exact point estimate; planning_range is optional native-currency unit uncertainty and must not be invented merely because fields exist. Use stored FX only, with exact decimal strings. Keep floating-local YYYY-MM-DDTHH:MM timestamps with no Z or offset. Do not invent coordinates, terminals, gates, platforms, logistics, or ranges when not reasonably known. Never include passwords, card details, or secrets. Return the whole document and preserve unknown extension fields.`;
 async function clearOfflineTripData() {
   if (!confirm('Remove this device\'s saved offline trip copy? This never changes the itinerary on your home server.')) return;
   try { await clearOfflineSnapshot(); state.offlineSnapshot = null; toast('This device\'s offline trip copy was removed.', 'success'); }
@@ -1777,7 +1980,7 @@ function bindEvents() {
   el('delete-cost-button').addEventListener('click', () => { const item = state.costDialogItem; if (!item || !confirm(`Delete ${item.name}?`)) return; state.draft.budget.cost_items = state.draft.budget.cost_items.filter(candidate => candidate.id !== item.id); el('cost-dialog').close(); markDirty(`Deleted budget cost: ${item.name}`); renderBudget(); });
   el('cost-form').addEventListener('submit', event => { event.preventDefault(); applyCostDialog(); });
   el('add-payment-button').addEventListener('click', addDialogPayment);
-  ['cost-unit-amount', 'cost-basis', 'cost-quantity-source', 'cost-quantity', 'cost-currency'].forEach(id => el(id).addEventListener('input', () => { el('cost-quantity').disabled = el('cost-quantity-source').value !== 'manual' || el('cost-basis').value === 'fixed'; updateCostExpectedPreview(); }));
+  ['cost-unit-amount', 'cost-basis', 'cost-quantity-source', 'cost-quantity', 'cost-currency', 'cost-visit', 'cost-fx-rate', 'cost-range-low', 'cost-range-high', 'cost-range-confidence'].forEach(id => el(id).addEventListener('input', () => { el('cost-quantity').disabled = el('cost-quantity-source').value !== 'manual' || el('cost-basis').value === 'fixed'; updateCostExpectedPreview(); updateCostRangePreview(); }));
   el('quick-expense-form').addEventListener('submit', event => { event.preventDefault(); recordQuickExpense(); });
   el('close-quick-expense-dialog').addEventListener('click', () => el('quick-expense-dialog').close());
   el('cancel-quick-expense-button').addEventListener('click', () => el('quick-expense-dialog').close());
@@ -1825,6 +2028,24 @@ function bindEvents() {
     markDirty(`Location changed: ${location.name}`); renderEverything(); switchEditTab('locations');
   });
   el('delete-location').addEventListener('click', deleteLocation);
+  el('place-search').addEventListener('input', renderPlaceEditor);
+  el('add-place').addEventListener('click', addPlace);
+  el('place-form').addEventListener('submit', event => {
+    event.preventDefault(); const data = state.draft; const currentId = state.editPlaceId; const place = data.places[currentId];
+    const latitude = el('place-latitude').value.trim(); const longitude = el('place-longitude').value.trim();
+    if (Boolean(latitude) !== Boolean(longitude)) { toast('Supply both place coordinates or leave both blank.', 'error'); return; }
+    let newId = el('place-id').value.trim();
+    if (place._new) {
+      newId = slugify(newId); if (newId !== currentId && data.places[newId]) { toast('That place ID already exists.', 'error'); return; }
+      if (newId !== currentId) { delete data.places[currentId]; place.id = newId; data.places[newId] = place; state.editPlaceId = newId; }
+      delete place._new;
+    }
+    place.name = el('place-name').value.trim(); place.location_id = el('place-location').value; place.type = el('place-type').value.trim(); place.address = el('place-address').value.trim();
+    place.website = el('place-website').value.trim(); place.notes = el('place-notes').value.trim();
+    if (latitude) place.coordinates = { latitude: Number(latitude), longitude: Number(longitude) }; else delete place.coordinates;
+    markDirty(`Exact place changed: ${place.name}`); renderEverything(); switchEditTab('places');
+  });
+  el('delete-place').addEventListener('click', deletePlace);
   el('save-button').addEventListener('click', () => saveDraft().catch(error => toast(error.message, 'error')));
   el('cancel-button').addEventListener('click', cancelDraft);
   el('validate-button').addEventListener('click', () => validateDraft(true).catch(error => toast(error.message, 'error')));

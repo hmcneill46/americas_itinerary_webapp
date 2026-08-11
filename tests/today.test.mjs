@@ -14,3 +14,13 @@ test('Today retains exact budget strings and flags applicable missing FX', () =>
   assert.equal(result.money.expectedComplete, false);
   assert.equal(result.money.missingFx.some(entry => entry.item.id === item.id && entry.expected), true);
 });
+
+test('Today derives practical next-transport and tonight exact-place context', () => {
+  const result = deriveToday(data, '2027-04-09T07:30');
+  assert.equal(result.nextTransport.event.id, 'evt_train_london_paris');
+  assert.equal(result.nextTransport.places.departure.id, 'london_st_pancras');
+  assert.equal(result.nextTransport.places.arrival.id, 'paris_gare_du_nord');
+  assert.equal(result.nextTransport.logistics.operator, 'Example Rail');
+  assert.equal(result.tonight.place.id, 'paris_demo_hotel');
+  assert.equal(result.tonight.booking.id, 'booking_paris_stay');
+});

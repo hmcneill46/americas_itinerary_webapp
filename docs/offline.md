@@ -16,7 +16,7 @@ The MapLibre runtime and trip overlays are part of the app shell. The online Ope
 
 ## Privacy and clearing data
 
-The offline copy includes private itinerary information such as dates, bookings, references and budget data. It stays in this browser profile on this device and is not sent to a third party. Use **AI handoff → Clear offline trip copy** to remove the IndexedDB itinerary snapshot; this never changes the home-server file. Browser site-data controls can also clear the app shell and any remaining browser storage.
+The offline copy includes private itinerary information such as dates, exact accommodation/venue addresses, travel logistics, bookings, references and budget data. It stays in this browser profile on this device and is not sent to a third party. Use **AI handoff → Clear offline trip copy** to remove the IndexedDB itinerary snapshot; this never changes the home-server file. Browser site-data controls can also clear the app shell and any remaining browser storage.
 
 ## Development
 

@@ -5,7 +5,7 @@ The map uses MapLibre GL JS 6.3.0. Its JavaScript, worker, CSS and BSD licence a
 The implementation deliberately separates four concerns:
 
 - `static/map-config.js` loads and normalises public basemap settings from `GET /api/map-config`.
-- `static/map-data.js` converts validated schema-v5 locations, visits, events and bookings into provider-neutral visit, secondary-location and route records.
+- `static/map-data.js` converts validated schema-v9 locations, exact places, visits, events and bookings into provider-neutral visit, exact-place, secondary-location and route records.
 - `static/map-view.js` owns the long-lived MapLibre instance, GeoJSON sources/layers, markers, popups, camera and network fallback.
 - `static/app.js` connects map selections to days/events and sends only explicit focus requests to the camera.
 
@@ -42,7 +42,9 @@ Changing providers should require configuration, not edits to trip logic. A cust
 
 Primary visits use numbered DOM markers anchored exactly to itinerary longitude/latitude. Repeated visits at the same coordinates share one grouped marker whose badge and popup expose each visit in trip order; visits are never moved away from the real place merely to avoid overlap. Locations referenced by events but not visits use smaller secondary dots.
 
-Travel/Hike events with valid `from_location_id` and `to_location_id` references become route segments. When a consecutive visit has no complete travel event, the visit's arrival information supplies a fallback segment. Every current segment has `geometryKind: "schematic"` in the derived browser model and is drawn as a dashed endpoint connection. User-facing copy calls this an **approximate map connection** and explains that it does not trace the actual road, railway, flight path, ferry route or walking trail. Real route geometry can later replace the geometry resolver without coupling it to the basemap provider; it is not yet a persisted schema-v8 field.
+Travel/Hike events with valid `from_location_id` and `to_location_id` references become route segments. When a consecutive visit has no complete travel event, the visit's arrival information supplies a fallback segment. Every current segment has `geometryKind: "schematic"` in the derived browser model and is drawn as a dashed endpoint connection. User-facing copy calls this an **approximate map connection** and explains that it does not trace the actual road, railway, flight path, ferry route or walking trail. Real route geometry can later replace the geometry resolver without coupling it to the basemap provider; it is not yet persisted.
+
+Schema-v9 exact places are a separate contextual layer. Route-level visit markers remain primary. Selecting a visit or route reveals only its referenced exact places; explicitly focusing a place zooms to its literal stored coordinate. Unknown coordinates are never fabricated, and a UI action may focus the parent visit instead. Exact points use GeoJSON circle layers, while the established DOM visit-marker root remains wholly controlled by MapLibre with no screen offsets.
 
 Popup content is constructed with DOM nodes and `textContent`, not raw itinerary HTML.
 

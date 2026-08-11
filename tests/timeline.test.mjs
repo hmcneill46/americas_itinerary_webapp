@@ -194,7 +194,7 @@ test('transport modes use a restrained stable style taxonomy', () => {
   assert.equal(transportStyleKey('Local transfer'), 'transfer');
 });
 
-test('obsolete whole-trip Trip Flow UI is removed, filters use a phone dialog, and schema remains v8', async () => {
+test('obsolete whole-trip Trip Flow UI is removed, filters use a phone dialog, and schema remains current', async () => {
   const [html, app, timeline, styles, example] = await Promise.all([
     readFile(new URL('../static/index.html', import.meta.url), 'utf8'),
     readFile(new URL('../static/app.js', import.meta.url), 'utf8'),
@@ -209,5 +209,5 @@ test('obsolete whole-trip Trip Flow UI is removed, filters use a phone dialog, a
   assert.match(app, /window\.visualViewport/);
   assert.match(styles, /html, body \{[^}]*overflow-x: clip/);
   assert.match(styles, /@media \(max-width: 720px\)[^]*\.filter-popover \{ display: none !important; \}/);
-  assert.equal(JSON.parse(example).schema_version, 8);
+  assert.equal(JSON.parse(example).schema_version, 9);
 });

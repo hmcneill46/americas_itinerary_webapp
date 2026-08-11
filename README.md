@@ -42,7 +42,7 @@ python tools/validate_itinerary.py data/itinerary.example.json
 
 ## JSON portability and time model
 
-The documented current format is schema v8: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable IDs, structured booking lifecycle/timing advice, first-class budget items, typed fields and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
+The documented current format is schema v9: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable broad route locations, exact places/venues, practical travel logistics, structured booking advice, first-class exact-money budget items and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
 
 Use **AI handoff** to download a saved trip or explicitly-labelled current draft, copy concise AI instructions, and preview an imported complete JSON trip. Import migration/validation is in-memory; applying replaces only the draft and the normal revision-protected Save remains separate. See [AI handoff](docs/ai-handoff.md).
 
@@ -53,10 +53,10 @@ Download/upload supports an AI-assisted workflow: download JSON, edit it with a 
 ## Views and editing
 
 - **Schedule** has two day-by-day modes on the same 24-hour timeline. **Events** renders exact-minute event segments, overlaps, multi-day clipping, search and independent category filters. **Places & travel** derives one non-overlapping physical sequence per day: location, travel, then destination. Overnight journeys clip across rows, while untimed transitions and contradictory legs remain visibly uncertain instead of gaining invented clock times. Desktop selections use a closeable detail panel; phone selections open a full-screen detail view.
-- **Map** uses a locally served, pinned MapLibre GL JS runtime with an OpenFreeMap Positron vector basemap. It shows ordered visit markers, repeated visits, secondary event locations and tappable dashed route connections. Map selections can open the relevant day or event, while explicit focus actions leave ordinary manual exploration alone.
+- **Map** uses a locally served, pinned MapLibre GL JS runtime with an OpenFreeMap Positron vector basemap. It shows ordered visit markers, repeated visits, tappable approximate route connections, and contextual exact-place points for a selected visit/journey without cluttering whole-trip zoom. Map selections can open the relevant day or event, while explicit focus actions leave ordinary manual exploration alone.
 - **Budget** keeps exact-decimal native-currency cost items, stored FX snapshots, expected/committed/paid totals, deposits/refunds, category and visit breakdowns, plus a responsive cost editor and quick-expense flow. `budget.base_currency` is the sole home/reporting currency. Linked costs show their native price first and a stored-rate home equivalent second. No live currency service is used; an item without an FX snapshot is visibly excluded from affected home-currency totals.
 - **Bookings** is an action-first view: lifecycle, explainable timing strategy, moving lead-time recommendations, hard deadlines, risk/flexibility rationale and optional Budget links. It does not scrape providers or claim live availability.
-- **Edit** supports events, locations, visit duration/order, day information and route date reflow.
+- **Edit** supports events and travel logistics, broad locations, exact places, visit duration/order, day information and route date reflow.
 
 Route reflow shifts a complete visit, its days and its events while retaining floating-local times.
 
@@ -110,7 +110,7 @@ The application shell and pinned MapLibre library are served by this app. The de
 
 ```text
 app.py                         FastAPI API, revisions, atomic saves and backups
-trip_schema.py                 Schema v8 models, validation and migrations
+trip_schema.py                 Schema v9 models, validation and migrations
 static/                        Plain-JavaScript UI, timeline derivation, MapLibre integration and pinned map runtime
 data/itinerary.example.json    Canonical public demo data
 data/itinerary.json            Private live itinerary (ignored)

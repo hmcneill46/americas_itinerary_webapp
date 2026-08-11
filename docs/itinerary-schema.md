@@ -1,6 +1,6 @@
-# Itinerary JSON schema (version 8)
+# Itinerary JSON schema (version 9)
 
-Version 8 is the canonical portable format used by Trip Planner. A document is UTF-8 JSON with a single root object. It is intended to be readable and editable by people and generative AI tools.
+Version 9 is the canonical portable format used by Trip Planner. A document is UTF-8 JSON with a single root object. It is intended to be readable and editable by people and generative AI tools.
 
 Do not add comments to JSON. Do not use `null` for defined fields: omit an optional field or use its documented empty value. Unknown extension fields are retained, but consumers should prefer the documented fields.
 
@@ -10,9 +10,10 @@ All root fields are required, even when an array is empty.
 
 ```json
 {
-  "schema_version": 8,
+  "schema_version": 9,
   "metadata": {},
   "locations": {},
+  "places": {},
   "visits": [],
   "days": [],
   "events": [],
@@ -21,8 +22,8 @@ All root fields are required, even when an array is empty.
 }
 ```
 
-- `schema_version` must be the integer `8`.
-- `locations` is an object keyed by location ID. All other collections are arrays.
+- `schema_version` must be the integer `9`.
+- `locations` and `places` are objects keyed by their stable IDs. Visits, days, events and bookings are arrays.
 - `visits` and `days` must be non-empty. `events`, `bookings`, and `budget.cost_items` may be empty.
 
 ## IDs and references
@@ -42,7 +43,7 @@ Required fields:
 - `category_colours`: object mapping category names to strict six-digit hex colours such as `"#E58C47"`.
 - `map_bounds`: numeric `min_lon`, `max_lon`, `min_lat`, `max_lat`. Longitude is in `[-180, 180]`, latitude in `[-90, 90]`, minima must be less than maxima, and every location must be inside the bounds.
 
-The interactive map currently fits its camera from visit coordinates rather than using `map_bounds`. The validated bounds remain part of schema v8 for portability, compatibility and other consumers; keep them large enough to contain every location.
+The interactive map currently fits its camera from visit coordinates rather than using `map_bounds`. The validated bounds remain part of schema v9 for portability, compatibility and other consumers; keep them large enough to contain every location and every exact place that has coordinates.
 
 Optional string fields default to `""`: `description`, `time_model_note`, `created_from`, and `default_currency`. A non-empty `default_currency` is a three-letter uppercase code such as `EUR`; it is only a trip-level hint, not a budgeting model.
 
@@ -90,6 +91,27 @@ Each location requires `id`, non-blank `name`, non-blank `country`, numeric fini
 
 Countries and location IDs are free text/IDs rather than a continent-specific list.
 
+## Exact places
+
+`locations` remain broad route-level places such as London, Paris, a national park, or an island. `places` are optional exact venues inside those locations: accommodation, a station, terminal, platform complex, attraction, trailhead, restaurant, or meeting point. Do not create a new broad location for every hotel or station.
+
+Each place requires `id`, non-blank `name`, valid parent `location_id`, and non-blank free-text `type`. Optional `address`, `website`, and `notes` strings default to `""`; a website must be blank or an absolute `http`/`https` URL. Coordinates are optional as one complete object and must be omitted—not `null`—when unknown. Never invent coordinates.
+
+```json
+"paris_gare_du_nord": {
+  "id": "paris_gare_du_nord",
+  "name": "Gare du Nord",
+  "location_id": "paris",
+  "type": "Railway station",
+  "address": "18 Rue de Dunkerque, Paris",
+  "coordinates": {"latitude": 48.8809, "longitude": 2.3553},
+  "website": "",
+  "notes": "Known arrival point."
+}
+```
+
+Coordinates use named latitude/longitude fields in JSON. MapLibre/GeoJSON derivation converts them to `[longitude, latitude]`. A place coordinate must fall within `metadata.map_bounds`.
+
 ## Visits
 
 A visit is one contiguous route block at one location.
@@ -124,11 +146,14 @@ An event requires:
 
 Optional fields default as follows:
 
-- `from_location_id`, `to_location_id`, `transport_mode`, `notes`: `""`;
+- `from_location_id`, `to_location_id`, `place_id`, `from_place_id`, `to_place_id`, `transport_mode`, `notes`: `""`;
+- `travel_logistics`: an object whose string fields default to `""` and whose `recommended_arrival_lead_minutes` defaults to `0`;
 - `day_summaries`, `source_dates`: `[]`;
 - `locked`: `false` (a JSON boolean, not `"false"`).
 
 `from_location_id` and `to_location_id` may be blank or reference locations. `transport_mode` uses the same values as visit `arrival_mode`.
+
+`place_id` identifies an exact venue for an ordinary event and must belong to `location_id`. For cross-location travel, `from_place_id` and `to_place_id` identify exact endpoints and must belong to `from_location_id` and `to_location_id`. Leave any unknown reference blank. Travel logistics may store `operator`, `service_number`, `seat`, departure/arrival `terminal`, `platform`, and `gate`, `recommended_arrival_lead_minutes` (0–1440), `baggage_note`, and `instructions`. These are operational facts, not a booking record; omit unknown facts rather than guessing.
 
 Timestamps use `YYYY-MM-DDTHH:MM` (optional seconds are accepted) with no `Z` and no offset:
 
@@ -143,6 +168,23 @@ Timestamps use `YYYY-MM-DDTHH:MM` (optional seconds are accepted) with no `Z` an
   "location_id": "paris",
   "from_location_id": "london",
   "to_location_id": "paris",
+  "place_id": "",
+  "from_place_id": "london_st_pancras",
+  "to_place_id": "paris_gare_du_nord",
+  "travel_logistics": {
+    "operator": "Example Rail",
+    "service_number": "EX9012",
+    "seat": "Coach 8, seat 42",
+    "departure_terminal": "International departures",
+    "departure_platform": "",
+    "departure_gate": "",
+    "arrival_terminal": "",
+    "arrival_platform": "",
+    "arrival_gate": "",
+    "recommended_arrival_lead_minutes": 75,
+    "baggage_note": "Keep documents accessible.",
+    "instructions": "Pass security before boarding."
+  },
   "transport_mode": "Train",
   "confidence": "High",
   "notes": "Times are illustrative.",
@@ -165,7 +207,7 @@ Bookings are first-class action planning records. Lifecycle says what has happen
 Required: stable `id`, non-blank `title`, non-blank free-text `type` (such as `Accommodation`, `Flight`, `Tour`, or a custom type), `lifecycle`, and `timing`.
 
 - `lifecycle` is one of `not_researched`, `researching`, `ready_to_book`, `booked`, `cancelled`, or `not_required`.
-- `event_id`, `visit_id`, `location_id`, and `cost_item_id` are blank or valid stable references. Visit/location references must agree. A cost link makes Budget the canonical source for expected, committed, and paid money.
+- `event_id`, `visit_id`, `location_id`, `place_id`, and `cost_item_id` are blank or valid stable references. A booking place must belong to the linked broad location/visit/event. Visit/location references must agree. A cost link makes Budget the canonical source for expected, committed, and paid money.
 - `date`, `booking_deadline`, `time`, `duration`, `details`, `provider`, `reference`, `notes` are optional retained practical fields. `url` is blank or an absolute `http`/`https` URL. Never store card details, passwords, or credentials.
 - `timing.strategy` is `unknown`, `book_now`, `before_departure`, `lead_time`, `on_arrival`, or `flexible`. Use `recommended_date` for a fixed soft recommendation, or `lead_days` plus `anchor` (`event_start`, `visit_start`, or `trip_start`) for a date that moves with the itinerary. `hard_deadline` is a distinct provider deadline.
 - Risk/value and advice fields use `unknown`, `low`, `medium`, or `high`: `sell_out_risk`, `price_rise_risk`, `flexibility_value`, and `confidence`. `rationale`, `last_researched_date`, and safe `source_urls` explain the advice.
@@ -197,6 +239,7 @@ Required: stable `id`, non-blank `title`, non-blank free-text `type` (such as `A
   "event_id": "evt_paris_checkin",
   "visit_id": "paris_01",
   "location_id": "paris",
+  "place_id": "paris_demo_hotel",
   "cost_item_id": "cost_paris_accommodation",
   "legacy": {}
 }
@@ -206,7 +249,7 @@ Booking lifecycle never invents money. `cost_item_id` and the reciprocal `budget
 
 ## Budget and money
 
-`budget` is required in schema v8. It is the only canonical place for trip financial data; do not add ad-hoc prices to events or bookings.
+`budget` is required in schema v9. It is the only canonical place for trip financial data; do not add ad-hoc prices to events or bookings.
 
 ```json
 "budget": {
@@ -239,6 +282,12 @@ Each `cost_items` object has a stable `id`, non-blank `name`, `category_id`, nat
     "quantity_source": "visit_days",
     "quantity": 0
   },
+  "planning_range": {
+    "low_unit_amount": "20.00",
+    "high_unit_amount": "35.00",
+    "confidence": "medium",
+    "note": "Daily spend depends on self-catering."
+  },
   "committed_amount": "0",
   "fx": {"rate_to_base": "0.86", "as_of_date": "2027-01-15", "source": "Manual planning rate", "note": ""},
   "payments": [],
@@ -254,6 +303,7 @@ Each `cost_items` object has a stable `id`, non-blank `name`, `category_id`, nat
 
 - `currency` is always the item's original/native currency; it is never replaced by its base equivalent.
 - `expected.unit_amount` is a non-negative exact decimal string. `basis` is `fixed`, `per_day`, `per_night`, `per_person`, or `per_unit`. A fixed item always uses manual quantity `1`.
+- `planning_range` is optional uncertainty around the native-currency **unit** estimate, not a replacement for `expected.unit_amount`. Supply both `low_unit_amount` and `high_unit_amount` exact non-negative decimal strings, or leave both blank. Low must not exceed high, and the point estimate must lie inside the range. `confidence` is `unknown`, `low`, `medium`, or `high`; `note` explains the uncertainty. The app scales the range through the same quantity rule as the point estimate. It is planning context only and does not alter committed or paid values.
 - `quantity_source` is `manual`, `visit_days`, or `visit_nights`. Derived sources require `visit_id` and use `quantity: 0`; the app derives inclusive visit days or inclusive days minus one nights. Manual quantities are positive integers for non-fixed bases.
 - `committed_amount` is a non-negative native-currency decimal: the known obligation, not a second estimate. It may differ from expected when a price changes.
 - `fx.rate_to_base` is the stored number of home-currency units per one native-currency unit. For a foreign currency it is required before that item can contribute to complete converted totals. `as_of_date`, `source`, and `note` explain the snapshot. Home-currency items use an effective rate of `"1"`. No live FX lookup is performed. The UI shows native money first and the stored-rate home equivalent second.
@@ -297,7 +347,7 @@ Payments belong inside their cost item and are all in that item's native currenc
 
 ## Versioning and migration
 
-The application currently accepts versions 4 through 8. Validation and import first make a deep copy, apply every migration in sequence, then run normal v8 validation. Migration never mutates the supplied object.
+The application currently accepts versions 4 through 9. Validation and import first make a deep copy, apply every migration in sequence, then run normal v9 validation. Migration never mutates the supplied object.
 
 For v4, each positional booking row becomes a v5 booking object with a deterministic ID. The old positions map to `date`, `type`, `title`, `time`, `duration`, `booking_deadline`, status input, `details`, `urgency`, `notes`, and `reference`. The complete original row is also retained under `legacy.positional_values`, so ambiguous or extra values are not lost. The subsequent v5→v6 migration adds a deterministic empty budget: default categories, base currency from `metadata.default_currency` (or `USD` when blank), and no inferred cost items. It never guesses prices from bookings.
 
@@ -305,8 +355,10 @@ The v6→v7 migration maps the former lifecycle (`planned`, `booked`, `cancelled
 
 The v7→v8 migration adds the neutral `planned` outcome and blank actual-time, outcome-note, and replacement fields to every event. It does not infer that past events happened or invent actual times.
 
-`GET /api/itinerary` may return an old saved file as migrated v8 data plus a `migrations` list. The original file is not rewritten merely by loading. `POST /api/validate` returns the migrated canonical document in `itinerary`; browser upload places that document only in the draft. A revision-protected save persists v8.
+The v8→v9 migration adds an empty `places` object, blank event/booking place references, neutral empty travel-logistics objects, and blank planning ranges. It preserves every existing record and extension field. It does not invent venues, coordinates, operators, terminals, seats, instructions, uncertainty, or confidence.
 
-Files newer than the supported version, older than v4, or unable to migrate safely are rejected. Applying the migration pipeline to v8 again makes no changes.
+`GET /api/itinerary` may return an old saved file as migrated v9 data plus a `migrations` list. The original file is not rewritten merely by loading. `POST /api/validate` returns the migrated canonical document in `itinerary`; browser upload places that document only in the draft. A revision-protected save persists v9.
+
+Files newer than the supported version, older than v4, or unable to migrate safely are rejected. Applying the migration pipeline to v9 again makes no changes.
 
 See `data/itinerary.example.json` for a complete public-safe canonical document.

@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 OLDEST_SUPPORTED_SCHEMA_VERSION = 4
 
 ALLOWED_MODES = {
@@ -209,6 +209,57 @@ class Location(SchemaModel):
         return value
 
 
+class PlaceCoordinates(SchemaModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+    @field_validator("latitude", "longitude")
+    @classmethod
+    def finite_coordinates(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("place coordinate must be finite")
+        return value
+
+
+class Place(SchemaModel):
+    """A specific venue within a broad route-level Location."""
+
+    id: str
+    name: str
+    location_id: str
+    type: str
+    address: str = ""
+    coordinates: PlaceCoordinates | None = None
+    website: str = ""
+    notes: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_coordinates(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "coordinates" in value and value["coordinates"] is None:
+            raise ValueError("coordinates must be omitted when unknown, not null")
+        return value
+
+    @field_validator("id", "location_id")
+    @classmethod
+    def valid_ids(cls, value: str, info: Any) -> str:
+        return _identifier(value, info.field_name)
+
+    @field_validator("name", "type")
+    @classmethod
+    def required_fields(cls, value: str, info: Any) -> str:
+        return _required_text(value, info.field_name)
+
+    @field_validator("website")
+    @classmethod
+    def valid_website(cls, value: str) -> str:
+        if value:
+            parsed = urlparse(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("website must be blank or an absolute http(s) URL")
+        return value
+
+
 class Visit(SchemaModel):
     id: str
     order: int = Field(ge=1)
@@ -275,6 +326,21 @@ class Day(SchemaModel):
         return _required_text(value, info.field_name)
 
 
+class TravelLogistics(SchemaModel):
+    operator: str = ""
+    service_number: str = ""
+    seat: str = ""
+    departure_terminal: str = ""
+    departure_platform: str = ""
+    departure_gate: str = ""
+    arrival_terminal: str = ""
+    arrival_platform: str = ""
+    arrival_gate: str = ""
+    recommended_arrival_lead_minutes: int = Field(default=0, ge=0, le=1440)
+    baggage_note: str = ""
+    instructions: str = ""
+
+
 class Event(SchemaModel):
     id: str
     title: str
@@ -285,6 +351,10 @@ class Event(SchemaModel):
     location_id: str
     from_location_id: str = ""
     to_location_id: str = ""
+    place_id: str = ""
+    from_place_id: str = ""
+    to_place_id: str = ""
+    travel_logistics: TravelLogistics = Field(default_factory=TravelLogistics)
     transport_mode: Literal[
         "", "Flight", "Road / bus", "Ferry / boat", "Train", "Trek / walk", "Mixed", "Local transfer"
     ] = ""
@@ -304,7 +374,7 @@ class Event(SchemaModel):
     def valid_required_ids(cls, value: str, info: Any) -> str:
         return _identifier(value, info.field_name)
 
-    @field_validator("from_location_id", "to_location_id")
+    @field_validator("from_location_id", "to_location_id", "place_id", "from_place_id", "to_place_id")
     @classmethod
     def valid_optional_ids(cls, value: str, info: Any) -> str:
         return value if value == "" else _identifier(value, info.field_name)
@@ -387,6 +457,7 @@ class Booking(SchemaModel):
     event_id: str = ""
     visit_id: str = ""
     location_id: str = ""
+    place_id: str = ""
     cost_item_id: str = ""
     legacy: dict[str, Any] = Field(default_factory=dict)
 
@@ -405,7 +476,7 @@ class Booking(SchemaModel):
     def valid_optional_dates(cls, value: str, info: Any) -> str:
         return _date_string(value, info.field_name, allow_blank=True)
 
-    @field_validator("event_id", "visit_id", "location_id", "cost_item_id")
+    @field_validator("event_id", "visit_id", "location_id", "place_id", "cost_item_id")
     @classmethod
     def valid_optional_ids(cls, value: str, info: Any) -> str:
         return value if value == "" else _identifier(value, info.field_name)
@@ -471,6 +542,28 @@ class CostExpectation(SchemaModel):
         return self
 
 
+class PlanningRange(SchemaModel):
+    """Optional native-currency uncertainty around one expected unit amount."""
+
+    low_unit_amount: str = ""
+    high_unit_amount: str = ""
+    confidence: Literal["unknown", "low", "medium", "high"] = "unknown"
+    note: str = ""
+
+    @field_validator("low_unit_amount", "high_unit_amount")
+    @classmethod
+    def valid_optional_amount(cls, value: str, info: Any) -> str:
+        return value if value == "" else _money(value, f"planning_range.{info.field_name}", allow_negative=False)
+
+    @model_validator(mode="after")
+    def valid_pair_and_order(self) -> "PlanningRange":
+        if bool(self.low_unit_amount) != bool(self.high_unit_amount):
+            raise ValueError("planning range low and high unit amounts must either both be set or both be blank")
+        if self.low_unit_amount and Decimal(self.low_unit_amount) > Decimal(self.high_unit_amount):
+            raise ValueError("planning range low unit amount must not exceed high unit amount")
+        return self
+
+
 class FxSnapshot(SchemaModel):
     """Stored native-to-base rate; blank means the item cannot yet be totalled in base currency."""
 
@@ -530,6 +623,7 @@ class CostItem(SchemaModel):
     category_id: str
     currency: str
     expected: CostExpectation
+    planning_range: PlanningRange = Field(default_factory=PlanningRange)
     committed_amount: str = "0"
     fx: FxSnapshot = Field(default_factory=FxSnapshot)
     payments: list[CostPayment] = Field(default_factory=list)
@@ -570,6 +664,16 @@ class CostItem(SchemaModel):
     @classmethod
     def valid_optional_dates(cls, value: str, info: Any) -> str:
         return _date_string(value, info.field_name, allow_blank=True)
+
+    @model_validator(mode="after")
+    def expected_inside_planning_range(self) -> "CostItem":
+        if self.planning_range.low_unit_amount:
+            expected = Decimal(self.expected.unit_amount)
+            low = Decimal(self.planning_range.low_unit_amount)
+            high = Decimal(self.planning_range.high_unit_amount)
+            if not low <= expected <= high:
+                raise ValueError("expected.unit_amount must lie within the supplied planning range")
+        return self
 
 
 class Budget(SchemaModel):
@@ -624,6 +728,11 @@ class ItineraryV8(ItineraryV7):
     schema_version: Literal[8]
 
 
+class ItineraryV9(ItineraryV7):
+    schema_version: Literal[9]
+    places: dict[str, Place]
+
+
 def _format_pydantic_errors(exc: ValidationError) -> list[str]:
     errors: list[str] = []
     for item in exc.errors(include_url=False):
@@ -671,7 +780,7 @@ def _cost_paid_amount(item: CostItem) -> Decimal:
     return total
 
 
-def _cross_record_errors(model: ItineraryV6 | ItineraryV7 | ItineraryV8) -> list[str]:
+def _cross_record_errors(model: ItineraryV6 | ItineraryV7 | ItineraryV8 | ItineraryV9) -> list[str]:
     errors: list[str] = []
     metadata = model.metadata
     start_date = _parse_date(metadata.start_date)
@@ -695,6 +804,19 @@ def _cross_record_errors(model: ItineraryV6 | ItineraryV7 | ItineraryV8) -> list
             errors.append(f"locations.{key}.longitude lies outside metadata.map_bounds.")
         if not (bounds.min_lat <= location.latitude <= bounds.max_lat):
             errors.append(f"locations.{key}.latitude lies outside metadata.map_bounds.")
+
+    places = model.places if isinstance(model, ItineraryV9) else {}
+    place_ids = set(places)
+    for key, place in places.items():
+        if key != place.id:
+            errors.append(f"places.{key}.id must match its object key.")
+        if place.location_id not in location_ids:
+            errors.append(f"places.{key}.location_id references unknown location {place.location_id!r}.")
+        if place.coordinates:
+            if not (bounds.min_lon <= place.coordinates.longitude <= bounds.max_lon):
+                errors.append(f"places.{key}.coordinates.longitude lies outside metadata.map_bounds.")
+            if not (bounds.min_lat <= place.coordinates.latitude <= bounds.max_lat):
+                errors.append(f"places.{key}.coordinates.latitude lies outside metadata.map_bounds.")
 
     errors.extend(_duplicate_errors([visit.id for visit in model.visits], "visit"))
     errors.extend(_duplicate_errors([event.id for event in model.events], "event"))
@@ -789,6 +911,15 @@ def _cross_record_errors(model: ItineraryV6 | ItineraryV7 | ItineraryV8) -> list
             reference = getattr(event, field_name)
             if reference and reference not in location_ids:
                 errors.append(f"{path}.{field_name} references unknown location {reference!r}.")
+        for place_field, location_field in (("place_id", "location_id"), ("from_place_id", "from_location_id"), ("to_place_id", "to_location_id")):
+            place_reference = getattr(event, place_field)
+            if not place_reference:
+                continue
+            place = places.get(place_reference)
+            if not place:
+                errors.append(f"{path}.{place_field} references unknown place {place_reference!r}.")
+            elif place.location_id != getattr(event, location_field):
+                errors.append(f"{path}.{place_field} must belong to {location_field}.")
         for source_date in event.source_dates:
             if source_date not in day_dates:
                 errors.append(f"{path}.source_dates contains date {source_date!r} outside days.")
@@ -806,6 +937,19 @@ def _cross_record_errors(model: ItineraryV6 | ItineraryV7 | ItineraryV8) -> list
             errors.append(f"{path}.visit_id references unknown visit {booking.visit_id!r}.")
         if booking.location_id and booking.location_id not in location_ids:
             errors.append(f"{path}.location_id references unknown location {booking.location_id!r}.")
+        if booking.place_id:
+            place = places.get(booking.place_id)
+            if not place:
+                errors.append(f"{path}.place_id references unknown place {booking.place_id!r}.")
+            else:
+                if booking.location_id and place.location_id != booking.location_id:
+                    errors.append(f"{path}.place_id must belong to its referenced location.")
+                visit = visit_by_id.get(booking.visit_id) if booking.visit_id else None
+                if visit and place.location_id != visit.location_id:
+                    errors.append(f"{path}.place_id must belong to its referenced visit location.")
+                event = next((event for event in model.events if event.id == booking.event_id), None) if booking.event_id else None
+                if event and place.location_id != event.location_id:
+                    errors.append(f"{path}.place_id must belong to its referenced event location.")
         if booking.visit_id and booking.location_id:
             visit = visit_by_id.get(booking.visit_id)
             if visit and visit.location_id != booking.location_id:
@@ -869,7 +1013,7 @@ def _cross_record_errors(model: ItineraryV6 | ItineraryV7 | ItineraryV8) -> list
     return list(dict.fromkeys(errors))
 
 
-def _budget_warnings(model: ItineraryV6 | ItineraryV7) -> list[str]:
+def _budget_warnings(model: ItineraryV6 | ItineraryV7 | ItineraryV8 | ItineraryV9) -> list[str]:
     warnings: list[str] = []
     visit_by_id = {visit.id: visit for visit in model.visits}
     expected_total = Decimal("0")
@@ -905,7 +1049,7 @@ def _budget_warnings(model: ItineraryV6 | ItineraryV7) -> list[str]:
 
 
 def validate_current_itinerary(data: Any) -> dict[str, list[str]]:
-    """Validate canonical schema v7 without mutating or normalising the supplied document."""
+    """Validate canonical schema v9 without mutating or normalising the supplied document."""
 
     if not isinstance(data, dict):
         return {"errors": ["The itinerary must be a JSON object."], "warnings": []}
@@ -914,7 +1058,7 @@ def validate_current_itinerary(data: Any) -> dict[str, list[str]]:
     except (TypeError, ValueError) as exc:
         return {"errors": [f"The itinerary must contain only standard JSON values: {exc}"], "warnings": []}
     try:
-        model = ItineraryV8.model_validate(data)
+        model = ItineraryV9.model_validate(data)
     except ValidationError as exc:
         return {"errors": _format_pydantic_errors(exc), "warnings": []}
     errors = _cross_record_errors(model)
@@ -1094,7 +1238,63 @@ def migrate_v7_to_v8(data: dict[str, Any]) -> dict[str, Any]:
     migrated["schema_version"] = 8
     return migrated
 
-MIGRATIONS = {4: migrate_v4_to_v5, 5: migrate_v5_to_v6, 6: migrate_v6_to_v7, 7: migrate_v7_to_v8}
+
+def migrate_v8_to_v9(data: dict[str, Any]) -> dict[str, Any]:
+    """Add neutral place, travel-logistics and planning-range structures without guessing."""
+
+    migrated = copy.deepcopy(data)
+    places = migrated.setdefault("places", {})
+    if not isinstance(places, dict):
+        raise MigrationError("places must be an object when present in schema version 8")
+    events = migrated.get("events")
+    bookings = migrated.get("bookings")
+    budget = migrated.get("budget")
+    if not isinstance(events, list) or not isinstance(bookings, list) or not isinstance(budget, dict):
+        raise MigrationError("schema version 8 requires event, booking and budget collections")
+    logistics_defaults = {
+        "operator": "", "service_number": "", "seat": "",
+        "departure_terminal": "", "departure_platform": "", "departure_gate": "",
+        "arrival_terminal": "", "arrival_platform": "", "arrival_gate": "",
+        "recommended_arrival_lead_minutes": 0, "baggage_note": "", "instructions": "",
+    }
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            raise MigrationError(f"events[{index}] must be an object in schema version 8")
+        for field_name in ("place_id", "from_place_id", "to_place_id"):
+            event.setdefault(field_name, "")
+        logistics = event.setdefault("travel_logistics", {})
+        if not isinstance(logistics, dict):
+            raise MigrationError(f"events[{index}].travel_logistics must be an object when present")
+        for field_name, default in logistics_defaults.items():
+            logistics.setdefault(field_name, default)
+    for index, booking in enumerate(bookings):
+        if not isinstance(booking, dict):
+            raise MigrationError(f"bookings[{index}] must be an object in schema version 8")
+        booking.setdefault("place_id", "")
+    cost_items = budget.get("cost_items")
+    if not isinstance(cost_items, list):
+        raise MigrationError("budget.cost_items must be an array in schema version 8")
+    for index, item in enumerate(cost_items):
+        if not isinstance(item, dict):
+            raise MigrationError(f"budget.cost_items[{index}] must be an object in schema version 8")
+        planning_range = item.setdefault("planning_range", {})
+        if not isinstance(planning_range, dict):
+            raise MigrationError(f"budget.cost_items[{index}].planning_range must be an object when present")
+        planning_range.setdefault("low_unit_amount", "")
+        planning_range.setdefault("high_unit_amount", "")
+        planning_range.setdefault("confidence", "unknown")
+        planning_range.setdefault("note", "")
+    migrated["schema_version"] = 9
+    return migrated
+
+
+MIGRATIONS = {
+    4: migrate_v4_to_v5,
+    5: migrate_v5_to_v6,
+    6: migrate_v6_to_v7,
+    7: migrate_v7_to_v8,
+    8: migrate_v8_to_v9,
+}
 
 
 def migrate_to_current(data: Any) -> tuple[dict[str, Any], list[str], int]:

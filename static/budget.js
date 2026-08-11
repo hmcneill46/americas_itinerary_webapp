@@ -129,6 +129,35 @@ export function presentNativeAndHome(amount, item, baseCurrency) {
   return { native, home, homeAmount, complete: true, text: `${native} · ≈ ${home}`, needsFx: false };
 }
 
+export function itemPlanningRange(item, itinerary) {
+  const range = item?.planning_range;
+  if (!range?.low_unit_amount || !range?.high_unit_amount) return null;
+  const quantity = visitQuantity(item, itinerary);
+  return {
+    lowUnitAmount: range.low_unit_amount,
+    highUnitAmount: range.high_unit_amount,
+    lowAmount: decimalMultiply(range.low_unit_amount, quantity),
+    highAmount: decimalMultiply(range.high_unit_amount, quantity),
+    quantity,
+    confidence: range.confidence || 'unknown',
+    note: range.note || '',
+  };
+}
+
+export function presentNativeAndHomeRange(lowAmount, highAmount, item, baseCurrency) {
+  const nativeCurrency = item?.currency || baseCurrency;
+  const native = `${nativeCurrency} ${decimalFixed(lowAmount)}–${decimalFixed(highAmount)}`;
+  if (nativeCurrency === baseCurrency) return { native, home: native, complete: true, text: native, needsFx: false };
+  if (decimalCompare(lowAmount, '0') === 0 && decimalCompare(highAmount, '0') === 0) {
+    const home = `${baseCurrency} ${decimalFixed('0')}–${decimalFixed('0')}`;
+    return { native, home, complete: true, text: `${native} · ≈ ${home}`, needsFx: false };
+  }
+  const rate = itemBaseRate(item, baseCurrency);
+  if (!rate) return { native, home: '', complete: false, text: `${native} · ${baseCurrency} unavailable — FX needed`, needsFx: true };
+  const home = `${baseCurrency} ${decimalFixed(decimalMultiply(lowAmount, rate))}–${decimalFixed(decimalMultiply(highAmount, rate))}`;
+  return { native, home, complete: true, text: `${native} · ≈ ${home}`, needsFx: false };
+}
+
 function previousRateNote(item, oldBaseCurrency) {
   if (item.currency === oldBaseCurrency) return '';
   const rate = item.fx?.rate_to_base;
