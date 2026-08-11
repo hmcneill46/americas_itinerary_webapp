@@ -74,6 +74,17 @@ def test_example_is_canonical_current_schema_and_validates():
     assert any(event["start"] == "2027-04-11T15:00" and event["end"] == "2027-04-12T09:00" for event in data["events"])
 
 
+def test_pwa_static_manifest_worker_and_icon_are_served():
+    client = TestClient(itinerary_app.app)
+    manifest = client.get("/static/manifest.webmanifest")
+    worker = client.get("/static/sw.js")
+    icon = client.get("/static/icons/trip-planner.svg")
+    assert manifest.status_code == worker.status_code == icon.status_code == 200
+    assert "manifest" in manifest.headers["content-type"]
+    assert "addEventListener('fetch'" in worker.text
+    assert "image/svg+xml" in icon.headers["content-type"]
+
+
 def test_v4_booking_migration_is_deterministic_lossless_and_idempotent():
     legacy, row = legacy_v4_itinerary()
     untouched = copy.deepcopy(legacy)

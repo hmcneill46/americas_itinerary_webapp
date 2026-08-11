@@ -33,6 +33,7 @@ For meaningful frontend, layout or interaction changes, perform actual screensho
 - Treat itineraries, bookings, backups and exports as private. Keep them out of Git and Docker build contexts. Never serve `exports/` as static content.
 - The application has no read authentication. Bind only to loopback or a Tailscale address; never default to `0.0.0.0` on a host or recommend public port forwarding. The optional edit token protects writes only.
 - Preserve mandatory optimistic concurrency, atomic replacement, exact pre-save backups and bounded backup rotation.
+- Offline/PWA support caches only a server-confirmed readable snapshot on the device. Keep offline mode strictly read-only: never add queued writes, replay, merging or persistence of unsaved drafts without an explicit product decision.
 - Keep dependencies modest. Prefer standard library, FastAPI/Pydantic and browser-native ES modules/DOM APIs. MapLibre is pinned under `static/vendor/`; do not add a frontend build pipeline merely to upgrade it.
 - Keep basemap, trip features and selection state separate. Current route lines are deliberately dashed and schematic; never present endpoint-only geometry as an actual road, rail or walking route.
 - Preserve route reflow and existing editors unless the task explicitly replaces them. Avoid a cosmetic frontend rewrite. Design and test phone-sized behavior for user-facing additions.

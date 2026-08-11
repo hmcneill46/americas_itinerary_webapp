@@ -48,7 +48,7 @@ Popup content is constructed with DOM nodes and `textContent`, not raw itinerary
 
 ## Network failure and offline limits
 
-If the online style cannot load, the map switches to a local blank style and keeps trip markers, schematic routes, controls and itinerary-side details available. If individual tile resources fail after the style loads, a map-specific warning appears and the rest of Trip Planner continues normally.
+If the online style cannot load, the map switches to a local blank style and keeps trip markers, schematic routes, controls and itinerary-side details available. If individual tile resources fail after the style loads, a map-specific warning appears and the rest of Trip Planner continues normally. The PWA app shell caches the locally vendored MapLibre runtime, but deliberately does not cache OpenFreeMap's third-party style, tiles, fonts or sprites; see [offline read resilience](offline.md).
 
 The application JavaScript and CSS work from the home server, but roads, labels, sprites, fonts and vector tiles are not available offline unless already cached by the browser. There is no offline download workflow in this version.
 

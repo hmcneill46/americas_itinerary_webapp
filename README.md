@@ -42,7 +42,7 @@ python tools/validate_itinerary.py data/itinerary.example.json
 
 ## JSON portability and time model
 
-The documented current format is schema v7: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable IDs, structured booking lifecycle/timing advice, first-class budget items, typed fields and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
+The documented current format is schema v8: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable IDs, structured booking lifecycle/timing advice, first-class budget items, typed fields and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
 
 Use **AI handoff** to download a saved trip or explicitly-labelled current draft, copy concise AI instructions, and preview an imported complete JSON trip. Import migration/validation is in-memory; applying replaces only the draft and the normal revision-protected Save remains separate. See [AI handoff](docs/ai-handoff.md).
 
@@ -61,6 +61,10 @@ Download/upload supports an AI-assisted workflow: download JSON, edit it with a 
 Route reflow shifts a complete visit, its days and its events while retaining floating-local times.
 
 All current route geometry is explicitly schematic: it connects known endpoints and does not claim to follow a road, railway, flight path or walking trail. No itinerary schema change was needed for the map overhaul. See [docs/map.md](docs/map.md) for provider configuration, attribution, failure behavior and the future PMTiles seam.
+
+## Offline read resilience
+
+On a deployed same-origin host, Trip Planner is a modest installable PWA. After a successful online load it keeps an app shell and one server-confirmed itinerary snapshot on that browser/device, so it can remain useful when Tailscale or the home server is temporarily unreachable. Offline data is clearly labelled and **read-only**: no edits, saves, import application or write queue exist. See [offline read resilience](docs/offline.md) for privacy, clearing local data, basemap limits and local-development behaviour.
 
 ## Private deployment and Tailscale
 

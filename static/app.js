@@ -5,6 +5,7 @@ import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuanti
 import { deriveBookingAction, groupBookings } from './booking.js?v=booking-v1';
 import { semanticDiff } from './import-diff.js?v=import-v1';
 import { deriveToday } from './today.js?v=today-v1';
+import { createSnapshot, readOfflineSnapshot, saveOfflineSnapshot, clearOfflineSnapshot } from './offline-store.js?v=offline-v5';
 
 'use strict';
 
@@ -39,11 +40,14 @@ const state = {
   bookingTypeFilter: '',
   bookingDialogItem: null,
   importPreview: null,
+  serverMode: 'loading',
+  offlineSnapshot: null,
 };
 
 const el = id => document.getElementById(id);
 const deepClone = value => structuredClone(value);
 const currentData = () => state.draft || state.saved;
+const canEdit = () => state.serverMode === 'online' && Boolean(state.revision);
 
 function readSessionValue(key) {
   try { return sessionStorage.getItem(key); } catch { return ''; }
@@ -180,13 +184,53 @@ function setSaveStatus(text, className = '') {
   node.className = `status-pill ${className}`.trim();
 }
 
+function snapshotAge(cachedAt) {
+  const parsed = Date.parse(cachedAt || '');
+  if (Number.isNaN(parsed)) return 'an unknown time';
+  const minutes = Math.max(0, Math.round((Date.now() - parsed) / 60_000));
+  if (minutes < 2) return 'just now';
+  if (minutes < 60) return `${minutes} minutes ago`;
+  if (minutes < 1440) return `today at ${new Date(parsed).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
+  return new Date(parsed).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function setConnectionStatus() {
+  const node = el('connection-status');
+  const offline = state.serverMode === 'offline';
+  node.classList.toggle('hidden', !offline);
+  node.textContent = offline ? `Offline copy, updated ${snapshotAge(state.offlineSnapshot?.cachedAt)}` : '';
+  node.title = offline ? `Server unavailable. Read-only snapshot last refreshed ${state.offlineSnapshot?.cachedAt || 'at an unknown time'}.` : '';
+  document.body.classList.toggle('offline-readonly', offline);
+}
+
+const OFFLINE_MUTATION_SELECTORS = [
+  '#save-button', '#cancel-button', '#add-cost-button', '#quick-expense-button', '#budget-settings-button',
+  '#add-booking-button', '#apply-import-button', '#delete-cost-button', '#delete-event-button',
+  '#duplicate-event', '#add-event', '#add-location', '#delete-location', '#reflow-route',
+  '#extend-visit-button', '#shorten-visit-button', '#handoff-import-input', '#upload-input', '#edit-token', '#validate-button',
+  '#today-quick-expense', '#add-payment-button', '[data-today-event]',
+  '[data-booking-action]', '[data-edit-booking]', '[data-booking-confirm]', '[data-cost-action]', '[data-edit-cost]',
+  '[data-remove-payment]', '[data-event-action]',
+].join(',');
+
+function applyReadOnlyUi() {
+  const offline = !canEdit();
+  document.querySelectorAll(OFFLINE_MUTATION_SELECTORS).forEach(node => {
+    node.disabled = offline;
+    node.title = offline ? 'Editing is unavailable while viewing the offline copy.' : '';
+  });
+  document.querySelectorAll('#view-edit input, #view-edit select, #view-edit textarea, dialog form input, dialog form select, dialog form textarea, dialog form button[type="submit"]').forEach(node => { node.disabled = offline; });
+}
+
 function markDirty(reason = 'Unsaved changes') {
+  if (!canEdit()) { toast('Editing is unavailable while viewing the offline copy.', 'info'); return false; }
   state.dirty = true;
   el('save-button').disabled = false;
   el('cancel-button').disabled = false;
   el('draft-status').textContent = reason;
   el('draft-status').className = 'draft-status dirty';
   setSaveStatus('Draft changed', 'dirty');
+  return true;
 }
 
 function markClean() {
@@ -215,12 +259,10 @@ async function apiJson(url, options = {}) {
   return body;
 }
 
-async function loadItinerary(showToast = false) {
-  setSaveStatus('Loading');
-  const payload = await apiJson('/api/itinerary');
+function applyLoadedItinerary(payload, { offline = false, snapshot = null } = {}) {
   state.saved = payload.itinerary;
   state.draft = deepClone(payload.itinerary);
-  state.revision = payload.revision;
+  state.revision = offline ? null : payload.revision;
   state.editTokenRequired = Boolean(payload.edit_token_required);
   state.selectedDate = state.selectedDate || payload.itinerary.metadata.start_date;
   state.editDayDate = state.editDayDate || state.selectedDate;
@@ -239,12 +281,28 @@ async function loadItinerary(showToast = false) {
   el('token-label').classList.toggle('hidden', !state.editTokenRequired);
   const storedToken = readSessionValue('itinerary_edit_token');
   if (storedToken) el('edit-token').value = storedToken;
-  markClean();
-  renderEverything();
-  if (payload.migrations?.length) {
-    toast(`Loaded and migrated ${payload.migrations.join(', ')} in memory. Save to persist schema v${payload.itinerary.schema_version}.`, 'info', 7000);
+  state.serverMode = offline ? 'offline' : 'online';
+  state.offlineSnapshot = snapshot;
+  markClean(); setConnectionStatus(); renderEverything(); applyReadOnlyUi();
+}
+
+async function loadItinerary(showToast = false) {
+  setSaveStatus('Loading');
+  try {
+    const payload = await apiJson('/api/itinerary');
+    applyLoadedItinerary(payload);
+    const snapshot = createSnapshot({ itinerary: payload.itinerary, revision: payload.revision });
+    if (snapshot) saveOfflineSnapshot(snapshot).catch(() => toast('This device could not update its offline copy.', 'info', 6000));
+    if (payload.migrations?.length) toast(`Loaded and migrated ${payload.migrations.join(', ')} in memory. Save to persist schema v${payload.itinerary.schema_version}.`, 'info', 7000);
+    if (showToast) toast('Reloaded the saved itinerary.', 'success');
+  } catch (error) {
+    let snapshot = null;
+    try { snapshot = await readOfflineSnapshot(); } catch { /* Offline storage may be unavailable. */ }
+    if (!snapshot) throw error;
+    applyLoadedItinerary({ itinerary: snapshot.itinerary, revision: snapshot.revision, edit_token_required: false }, { offline: true, snapshot });
+    setSaveStatus('Offline read-only', 'offline');
+    toast(`Server unavailable. Showing this device's saved copy from ${snapshotAge(snapshot.cachedAt)}.`, 'info', 7000);
   }
-  if (showToast) toast('Reloaded the saved itinerary.', 'success');
 }
 
 function renderEverything() {
@@ -264,6 +322,7 @@ function renderEverything() {
   } else if (state.activeTab === 'edit') {
     renderEditView();
   }
+  applyReadOnlyUi();
 }
 
 function switchTab(tab) {
@@ -278,6 +337,7 @@ function switchTab(tab) {
   if (tab === 'handoff') renderHandoff();
   if (tab === 'today') renderToday();
   if (tab === 'edit') renderEditView();
+  applyReadOnlyUi();
 }
 
 function switchEditTab(tab) {
@@ -1234,6 +1294,7 @@ function showValidationDialog(result) {
 }
 
 async function saveDraft() {
+  if (!canEdit()) { toast('Editing is unavailable while viewing the offline copy. Reload after the server returns before making changes.', 'info', 6000); return; }
   if (state.routeNeedsReflow) { toast('Press Reflow dates before saving the reordered route.', 'error'); switchEditTab('route'); return; }
   const validation = await validateDraft(false);
   if (!validation.valid) { showValidationDialog(validation); return; }
@@ -1248,6 +1309,8 @@ async function saveDraft() {
     state.revision = result.revision;
     state.draft = deepClone(result.itinerary);
     state.saved = deepClone(result.itinerary);
+    const snapshot = createSnapshot({ itinerary: result.itinerary, revision: result.revision });
+    if (snapshot) saveOfflineSnapshot(snapshot).catch(() => toast('Saved, but this device could not update its offline copy.', 'info', 6000));
     markClean();
     renderEverything();
     toast('Itinerary saved. A server-side backup was also created.', 'success');
@@ -1281,10 +1344,16 @@ function downloadDraft() {
 /* ---------------- AI handoff / safe import ---------------- */
 function renderToday() { const data=currentData(); const now=localNowFloating(); const model=deriveToday(data,now); const eventCard=event=>event?`<article class="today-event"><span>${escapeHtml(event.outcome||'planned')}</span><h3>${escapeHtml(event.title)}</h3><strong>${escapeHtml((event.actual_start||event.start).slice(11,16))}–${escapeHtml((event.actual_end||event.end).slice(11,16))}</strong><p>${escapeHtml(event.notes||'')}</p><div><button class="secondary-button small" data-today-outcome="completed" data-today-event="${escapeHtml(event.id)}">Mark completed</button><button class="secondary-button small" data-today-outcome="missed" data-today-event="${escapeHtml(event.id)}">Missed</button></div></article>`:'<article class="today-event empty"><h3>Nothing scheduled</h3><p>Enjoy the free time, or add a real-world update.</p></article>'; const schedule=model.events.map(event=>eventCard(event)).join('')||'<div class="budget-empty">No events planned for this calendar day.</div>'; const tonight=model.accommodation?`${model.accommodation.title} · ${model.accommodation.outcome||'planned'}`:'No accommodation identified for tonight'; el('today-content').innerHTML=`<section class="today-hero"><div><small>${escapeHtml(model.today)}</small><h2>${escapeHtml(model.day?.base||'Outside the trip itinerary')}</h2><p>${escapeHtml(model.day?`Day ${model.day.day_number} · ${model.day.country}`:'Check the trip dates or choose another view.')}</p></div><button id="today-quick-expense" class="secondary-button">+ Expense</button></section><section class="today-grid"><div><h2>Now</h2>${eventCard(model.active)}</div><div><h2>Next</h2>${eventCard(model.next)}</div><div><h2>Tonight</h2><article class="today-event"><h3>${escapeHtml(tonight)}</h3></article></div><div><h2>Needs attention</h2><article class="today-event"><p>${model.attention.length?escapeHtml(model.attention.map(item=>item.booking.title).join(' · ')):'No urgent booking action today.'}</p></article></div></section><section class="budget-section today-schedule"><h2>Today’s schedule</h2><p>Expected ${escapeHtml(model.money.currency)} ${model.money.expected.toFixed(2)} · recorded ${escapeHtml(model.money.currency)} ${model.money.paid.toFixed(2)}</p>${schedule}</section>`; document.querySelectorAll('[data-today-event]').forEach(button=>button.addEventListener('click',()=>{const event=data.events.find(item=>item.id===button.dataset.todayEvent); event.outcome=button.dataset.todayOutcome; event.outcome_note=button.dataset.todayOutcome==='missed'?'Recorded in Today view.':''; markDirty(`${event.title}: ${event.outcome}`); renderToday();})); el('today-quick-expense').addEventListener('click',()=>{switchTab('budget');el('quick-expense-button').click();}); }
 const AI_HANDOFF_TEXT = `You are modifying a Trip Planner itinerary JSON document. Return one complete valid JSON document only (not a patch or Markdown). Preserve schema_version and stable IDs whenever an entity is modified. Keep event timestamps as floating local YYYY-MM-DDTHH:MM values with no Z or UTC offset. Keep exact money and FX values as decimal strings. Preserve expected, committed and paid as distinct Budget concepts; booking lifecycle and booking timing are distinct. Do not add secrets, card data, or javascript: URLs.`;
+async function clearOfflineTripData() {
+  if (!confirm('Remove this device\'s saved offline trip copy? This never changes the itinerary on your home server.')) return;
+  try { await clearOfflineSnapshot(); state.offlineSnapshot = null; toast('This device\'s offline trip copy was removed.', 'success'); }
+  catch { toast('Could not remove this device\'s offline trip copy.', 'error'); }
+}
 function renderHandoff() {
   const data=currentData(); const summary=calculateBudget(data); const dirty=state.dirty ? 'Current draft has unsaved changes.' : 'Current draft matches the saved trip.';
   el('handoff-content').innerHTML=`<section class="handoff-hero"><div><h2>AI import & export</h2><p>Trip Planner JSON is the safe interchange format. Importing validates and previews changes before it touches your draft.</p></div><span class="booking-reason">${escapeHtml(dirty)}</span></section><section class="handoff-grid"><article class="budget-section"><h2>Export for planning help</h2><p>Download the precise version you intend to share.</p><div class="handoff-actions"><a class="secondary-button link-button" href="/api/download" download="itinerary.json">Download saved trip</a><button id="handoff-download-draft" class="secondary-button">Export current draft</button><button id="copy-ai-instructions" class="primary-button">Copy AI instructions</button></div></article><article class="budget-section"><h2>Import an updated trip</h2><p>JSON is migrated and validated on this home server, then compared with the current draft. It is never saved automatically.</p><label class="upload-button primary-button">Choose JSON to preview<input id="handoff-import-input" type="file" accept="application/json,.json"></label><small class="handoff-meta">${data.metadata.title} · ${data.visits.length} visits · ${data.events.length} events · ${data.bookings.length} bookings · expected ${escapeHtml(formatMoney(summary.totals.expected,summary.baseCurrency))}</small></article></section>`;
   el('handoff-download-draft').addEventListener('click', downloadDraft); el('copy-ai-instructions').addEventListener('click', async()=>{ try { await navigator.clipboard.writeText(AI_HANDOFF_TEXT); toast('AI instructions copied.', 'success'); } catch { toast('Copy is unavailable in this browser. Use the instructions shown in the AI handoff guide.', 'error'); } }); el('handoff-import-input').addEventListener('change',event=>previewImport(event.target.files[0]));
+  const clear = document.createElement('button'); clear.id = 'clear-offline-data'; clear.className = 'secondary-button'; clear.textContent = 'Clear offline trip copy'; clear.title = "Remove this device's stored itinerary snapshot"; clear.addEventListener('click', clearOfflineTripData); el('handoff-content').append(clear);
 }
 function importChangeRow(item) { return `<article class="import-change ${escapeHtml(item.importance)}"><span class="import-kind">${escapeHtml(item.kind)}</span><div><strong>${escapeHtml(item.label)}</strong>${item.before||item.after?`<p>${escapeHtml(item.before||'—')} <b>→</b> ${escapeHtml(item.after||'—')}</p>`:''}</div></article>`; }
 function showImportPreview(prepared, filename) {
@@ -1297,7 +1366,7 @@ async function previewImport(file) {
   if(!file) return; if(file.size>2*1024*1024){ toast('That JSON file is larger than the 2 MiB import limit.', 'error'); return; }
   try { const raw=await file.text(); const parsed=JSON.parse(raw); const prepared=await apiJson('/api/import-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itinerary:parsed})}); if(!prepared.valid){ showValidationDialog(prepared); toast('The import is invalid and cannot be applied.', 'error'); return; } showImportPreview(prepared,file.name); } catch(error) { toast(`Could not preview import: ${error.message}`, 'error',6000); } finally { const input=el('handoff-import-input')||el('upload-input'); if(input) input.value=''; }
 }
-function applyImportedDraft() { const preview=state.importPreview; if(!preview) return; state.draft=deepClone(preview.itinerary); state.selectedDate=state.draft.metadata.start_date; state.editDayDate=state.selectedDate; state.editEventId=null; state.importPreview=null; el('import-preview-dialog').close(); markDirty(`Imported ${preview.filename || 'itinerary'} applied to draft; save separately to persist it`); renderEverything(); switchTab('handoff'); toast('Imported itinerary is now your draft. Save it separately when ready.', 'success',6000); }
+function applyImportedDraft() { if (!canEdit()) { toast('Importing into the draft is unavailable while offline.', 'info'); return; } const preview=state.importPreview; if(!preview) return; state.draft=deepClone(preview.itinerary); state.selectedDate=state.draft.metadata.start_date; state.editDayDate=state.selectedDate; state.editEventId=null; state.importPreview=null; el('import-preview-dialog').close(); markDirty(`Imported ${preview.filename || 'itinerary'} applied to draft; save separately to persist it`); renderEverything(); switchTab('handoff'); toast('Imported itinerary is now your draft. Save it separately when ready.', 'success',6000); }
 
 async function uploadDraft(file) {
   await previewImport(file);
@@ -1305,6 +1374,7 @@ async function uploadDraft(file) {
 
 /* ---------------- Event bindings ---------------- */
 function bindEvents() {
+  document.addEventListener('submit', event => { if (!canEdit()) { event.preventDefault(); event.stopImmediatePropagation(); toast('Editing is unavailable while viewing the offline copy.', 'info'); } }, true);
   document.querySelectorAll('.tab-button').forEach(button => button.addEventListener('click', () => switchTab(button.dataset.tab)));
   document.querySelectorAll('.edit-subtab').forEach(button => button.addEventListener('click', () => switchEditTab(button.dataset.editTab)));
   el('reload-button').addEventListener('click', () => { if (!state.dirty || confirm('Discard unsaved changes and reload from disk?')) loadItinerary(true).catch(handleFatal); });
@@ -1408,5 +1478,23 @@ function handleFatal(error) {
   document.querySelector('.main-area').innerHTML = `<div class="editor-empty"><h2>Could not load the itinerary</h2><p>${escapeHtml(error.message)}</p></div>`;
 }
 
+function registerOfflineSupport() {
+  const localHost = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  const enabled = !localHost || new URLSearchParams(location.search).get('pwa') === '1';
+  if (enabled && 'serviceWorker' in navigator) navigator.serviceWorker.register('/static/sw.js', { scope: '/' }).catch(() => { /* PWA support is optional. */ });
+  window.addEventListener('offline', async () => {
+    if (!state.saved) return;
+    try { state.offlineSnapshot = await readOfflineSnapshot(); } catch { state.offlineSnapshot = null; }
+    state.serverMode = 'offline'; state.revision = null; setConnectionStatus(); setSaveStatus('Offline read-only', 'offline'); applyReadOnlyUi();
+    toast('Network unavailable. Reading remains available; editing is paused until the server returns.', 'info', 6000);
+  });
+  window.addEventListener('online', () => {
+    if (state.serverMode !== 'offline') return;
+    if (state.dirty) { toast('Network may be back. Reload the saved itinerary before editing; unsaved changes are still only in this tab.', 'info', 7000); return; }
+    loadItinerary(true).catch(() => { /* navigator.onLine does not prove the home server is reachable. */ });
+  });
+}
+
 bindEvents();
+registerOfflineSupport();
 loadItinerary().catch(handleFatal);
