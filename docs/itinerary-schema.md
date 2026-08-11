@@ -1,6 +1,6 @@
-# Itinerary JSON schema (version 7)
+# Itinerary JSON schema (version 8)
 
-Version 7 is the canonical portable format used by Trip Planner. A document is UTF-8 JSON with a single root object. It is intended to be readable and editable by people and generative AI tools.
+Version 8 is the canonical portable format used by Trip Planner. A document is UTF-8 JSON with a single root object. It is intended to be readable and editable by people and generative AI tools.
 
 Do not add comments to JSON. Do not use `null` for defined fields: omit an optional field or use its documented empty value. Unknown extension fields are retained, but consumers should prefer the documented fields.
 
@@ -10,7 +10,7 @@ All root fields are required, even when an array is empty.
 
 ```json
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "metadata": {},
   "locations": {},
   "visits": [],
@@ -21,7 +21,7 @@ All root fields are required, even when an array is empty.
 }
 ```
 
-- `schema_version` must be the integer `7`.
+- `schema_version` must be the integer `8`.
 - `locations` is an object keyed by location ID. All other collections are arrays.
 - `visits` and `days` must be non-empty. `events`, `bookings`, and `budget.cost_items` may be empty.
 
@@ -153,6 +153,10 @@ Timestamps use `YYYY-MM-DDTHH:MM` (optional seconds are accepted) with no `Z` an
 ```
 
 `08:30` means 08:30 at the itinerary location. It must not be converted to the browser timezone. `end` must be later than `start`. Events may span midnight or multiple days but must stay within their visit and the overall trip. Each `source_dates` value must refer to a day in the document.
+
+### Real-world outcomes
+
+Schema v8 retains planned `start`/`end` and adds optional real-world fields to every event: `outcome` (`planned`, `completed`, `delayed`, `missed`, `cancelled`, `skipped`, or `replaced`), floating-local `actual_start`/`actual_end`, `outcome_note`, and `replaces_event_id`. A replacement points to the original event; the original remains in history. Actual times never overwrite planned times.
 
 ## Bookings
 

@@ -15,7 +15,7 @@ function entityChanges(current, imported, entity) {
   for (const [id, previous] of currentMap) { if (!nextMap.has(id)) out.push(change(group,'removed',`${entityLabel[entity]} removed: ${names(current,entity,previous)}`, '', '', entity === 'visits' || entity === 'events' ? 'high' : 'normal')); }
   for (const [id, next] of nextMap) { const previous=currentMap.get(id); if (!previous) continue;
     const fields = entity === 'visits' ? [['start_date','start date'],['end_date','end date'],['location_id','location']]
-      : entity === 'events' ? [['title','title'],['start','start'],['end','end'],['location_id','location'],['transport_mode','transport']]
+      : entity === 'events' ? [['title','title'],['start','start'],['end','end'],['location_id','location'],['transport_mode','transport'],['outcome','outcome'],['actual_start','actual start'],['actual_end','actual end'],['replaces_event_id','replacement link']]
       : entity === 'bookings' ? [['lifecycle','lifecycle'],['provider','provider'],['cost_item_id','budget link'],['timing.strategy','booking strategy'],['timing.hard_deadline','hard deadline']]
       : entity === 'cost_items' ? [['expected.unit_amount','expected unit amount'],['committed_amount','committed amount'],['fx.rate_to_base','FX rate']]
       : [['name','name'],['latitude','latitude'],['longitude','longitude']];

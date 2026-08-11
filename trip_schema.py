@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 OLDEST_SUPPORTED_SCHEMA_VERSION = 4
 
 ALLOWED_MODES = {
@@ -79,7 +79,9 @@ def _date_string(value: str, field_name: str, *, allow_blank: bool = False) -> s
     return value
 
 
-def _local_datetime_string(value: str, field_name: str) -> str:
+def _local_datetime_string(value: str, field_name: str, allow_blank: bool = False) -> str:
+    if allow_blank and value == "":
+        return value
     if not LOCAL_DATETIME_RE.fullmatch(value):
         raise ValueError(f"{field_name} must be a floating local timestamp such as 2027-04-08T09:30")
     try:
@@ -291,6 +293,11 @@ class Event(SchemaModel):
     day_summaries: list[str] = Field(default_factory=list)
     source_dates: list[str] = Field(default_factory=list)
     locked: bool = False
+    outcome: Literal["planned", "completed", "delayed", "missed", "cancelled", "skipped", "replaced"] = "planned"
+    actual_start: str = ""
+    actual_end: str = ""
+    outcome_note: str = ""
+    replaces_event_id: str = ""
 
     @field_validator("id", "visit_id", "location_id")
     @classmethod
@@ -307,10 +314,21 @@ class Event(SchemaModel):
     def required_fields(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
 
-    @field_validator("start", "end")
+    @field_validator("start", "end", "actual_start", "actual_end")
     @classmethod
     def valid_timestamps(cls, value: str, info: Any) -> str:
-        return _local_datetime_string(value, info.field_name)
+        return _local_datetime_string(value, info.field_name, allow_blank=info.field_name.startswith("actual_"))
+
+    @field_validator("replaces_event_id")
+    @classmethod
+    def valid_replaces_id(cls, value: str) -> str:
+        return value if value == "" else _identifier(value, "replaces_event_id")
+
+    @model_validator(mode="after")
+    def valid_actual_range(self) -> "Event":
+        if self.actual_start and self.actual_end and _parse_datetime(self.actual_end) < _parse_datetime(self.actual_start):
+            raise ValueError("actual_end must not be earlier than actual_start")
+        return self
 
     @field_validator("source_dates")
     @classmethod
@@ -602,6 +620,9 @@ class ItineraryV7(SchemaModel):
     bookings: list[Booking]
     budget: Budget
 
+class ItineraryV8(ItineraryV7):
+    schema_version: Literal[8]
+
 
 def _format_pydantic_errors(exc: ValidationError) -> list[str]:
     errors: list[str] = []
@@ -650,7 +671,7 @@ def _cost_paid_amount(item: CostItem) -> Decimal:
     return total
 
 
-def _cross_record_errors(model: ItineraryV6 | ItineraryV7) -> list[str]:
+def _cross_record_errors(model: ItineraryV6 | ItineraryV7 | ItineraryV8) -> list[str]:
     errors: list[str] = []
     metadata = model.metadata
     start_date = _parse_date(metadata.start_date)
@@ -771,6 +792,11 @@ def _cross_record_errors(model: ItineraryV6 | ItineraryV7) -> list[str]:
         for source_date in event.source_dates:
             if source_date not in day_dates:
                 errors.append(f"{path}.source_dates contains date {source_date!r} outside days.")
+        if event.replaces_event_id:
+            if event.replaces_event_id == event.id:
+                errors.append(f"{path}.replaces_event_id must not reference itself.")
+            elif event.replaces_event_id not in event_ids:
+                errors.append(f"{path}.replaces_event_id references unknown event {event.replaces_event_id!r}.")
 
     for index, booking in enumerate(model.bookings):
         path = f"bookings[{index}]"
@@ -888,7 +914,7 @@ def validate_current_itinerary(data: Any) -> dict[str, list[str]]:
     except (TypeError, ValueError) as exc:
         return {"errors": [f"The itinerary must contain only standard JSON values: {exc}"], "warnings": []}
     try:
-        model = ItineraryV7.model_validate(data)
+        model = ItineraryV8.model_validate(data)
     except ValidationError as exc:
         return {"errors": _format_pydantic_errors(exc), "warnings": []}
     errors = _cross_record_errors(model)
@@ -1056,7 +1082,19 @@ def migrate_v6_to_v7(data: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-MIGRATIONS = {4: migrate_v4_to_v5, 5: migrate_v5_to_v6, 6: migrate_v6_to_v7}
+def migrate_v7_to_v8(data: dict[str, Any]) -> dict[str, Any]:
+    """Add neutral real-world event fields; never infer what actually happened."""
+    migrated = copy.deepcopy(data)
+    if not isinstance(migrated.get("events"), list):
+        raise MigrationError("events must be an array in schema version 7")
+    for event in migrated["events"]:
+        if not isinstance(event, dict):
+            raise MigrationError("events must contain objects in schema version 7")
+        event.update({"outcome": "planned", "actual_start": "", "actual_end": "", "outcome_note": "", "replaces_event_id": ""})
+    migrated["schema_version"] = 8
+    return migrated
+
+MIGRATIONS = {4: migrate_v4_to_v5, 5: migrate_v5_to_v6, 6: migrate_v6_to_v7, 7: migrate_v7_to_v8}
 
 
 def migrate_to_current(data: Any) -> tuple[dict[str, Any], list[str], int]:

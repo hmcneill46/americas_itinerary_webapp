@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "metadata": {
     "title": "European Rail Weekend",
     "description": "Public demo data showing a short multi-country trip with local times, route changes and bookings.",

@@ -4,6 +4,7 @@ import { TripMap } from './map-view.js?v=map-marker-anchor-1';
 import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuantity } from './budget.js?v=budget-v5';
 import { deriveBookingAction, groupBookings } from './booking.js?v=booking-v1';
 import { semanticDiff } from './import-diff.js?v=import-v1';
+import { deriveToday } from './today.js?v=today-v1';
 
 'use strict';
 
@@ -254,6 +255,7 @@ function renderEverything() {
     renderBookings();
   } else if (state.activeTab === 'handoff') {
     renderHandoff();
+  } else if (state.activeTab === 'today') { renderToday();
   } else if (state.activeTab === 'edit') {
     renderEditView();
   }
@@ -269,6 +271,7 @@ function switchTab(tab) {
   if (tab === 'budget') renderBudget();
   if (tab === 'bookings') renderBookings();
   if (tab === 'handoff') renderHandoff();
+  if (tab === 'today') renderToday();
   if (tab === 'edit') renderEditView();
 }
 
@@ -1271,6 +1274,7 @@ function downloadDraft() {
 }
 
 /* ---------------- AI handoff / safe import ---------------- */
+function renderToday() { const data=currentData(); const now=formatFloating(Date.now()); const model=deriveToday(data,now); const eventCard=event=>event?`<article class="today-event"><span>${escapeHtml(event.outcome||'planned')}</span><h3>${escapeHtml(event.title)}</h3><strong>${escapeHtml((event.actual_start||event.start).slice(11,16))}–${escapeHtml((event.actual_end||event.end).slice(11,16))}</strong><p>${escapeHtml(event.notes||'')}</p><div><button class="secondary-button small" data-today-outcome="completed" data-today-event="${escapeHtml(event.id)}">Mark completed</button><button class="secondary-button small" data-today-outcome="missed" data-today-event="${escapeHtml(event.id)}">Missed</button></div></article>`:'<article class="today-event empty"><h3>Nothing scheduled</h3><p>Enjoy the free time, or add a real-world update.</p></article>'; const schedule=model.events.map(event=>eventCard(event)).join('')||'<div class="budget-empty">No events planned for this calendar day.</div>'; const tonight=model.accommodation?`${model.accommodation.title} · ${model.accommodation.outcome}`:'No accommodation identified for tonight'; el('today-content').innerHTML=`<section class="today-hero"><div><small>${escapeHtml(model.today)}</small><h2>${escapeHtml(model.day?.base||'Outside the trip itinerary')}</h2><p>${escapeHtml(model.day?`Day ${model.day.day_number} · ${model.day.country}`:'Check the trip dates or choose another view.')}</p></div><button id="today-quick-expense" class="secondary-button">+ Expense</button></section><section class="today-grid"><div><h2>Now</h2>${eventCard(model.active)}</div><div><h2>Next</h2>${eventCard(model.next)}</div><div><h2>Tonight</h2><article class="today-event"><h3>${escapeHtml(tonight)}</h3></article></div><div><h2>Needs attention</h2><article class="today-event"><p>${model.attention.length?escapeHtml(model.attention.map(item=>item.booking.title).join(' · ')):'No urgent booking action today.'}</p></article></div></section><section class="budget-section today-schedule"><h2>Today’s schedule</h2><p>Expected ${escapeHtml(model.money.currency)} ${model.money.expected.toFixed(2)} · recorded ${escapeHtml(model.money.currency)} ${model.money.paid.toFixed(2)}</p>${schedule}</section>`; document.querySelectorAll('[data-today-event]').forEach(button=>button.addEventListener('click',()=>{const event=data.events.find(item=>item.id===button.dataset.todayEvent); event.outcome=button.dataset.todayOutcome; event.outcome_note=button.dataset.todayOutcome==='missed'?'Recorded in Today view.':''; markDirty(`${event.title}: ${event.outcome}`); renderToday();})); el('today-quick-expense').addEventListener('click',()=>{switchTab('budget');el('quick-expense-button').click();}); }
 const AI_HANDOFF_TEXT = `You are modifying a Trip Planner itinerary JSON document. Return one complete valid JSON document only (not a patch or Markdown). Preserve schema_version and stable IDs whenever an entity is modified. Keep event timestamps as floating local YYYY-MM-DDTHH:MM values with no Z or UTC offset. Keep exact money and FX values as decimal strings. Preserve expected, committed and paid as distinct Budget concepts; booking lifecycle and booking timing are distinct. Do not add secrets, card data, or javascript: URLs.`;
 function renderHandoff() {
   const data=currentData(); const summary=calculateBudget(data); const dirty=state.dirty ? 'Current draft has unsaved changes.' : 'Current draft matches the saved trip.';

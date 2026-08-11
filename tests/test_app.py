@@ -84,10 +84,10 @@ def test_v4_booking_migration_is_deterministic_lossless_and_idempotent():
 
     assert legacy == untouched
     assert source_version == 4
-    assert applied == ["v4->v5", "v5->v6", "v6->v7"]
+    assert applied == ["v4->v5", "v5->v6", "v6->v7", "v7->v8"]
     assert second_applied == []
     assert first == second == repeated
-    assert first["schema_version"] == 7
+    assert first["schema_version"] == 8
     assert first["budget"]["cost_items"] == []
     assert first["budget"]["base_currency"] == "GBP"
     assert first["legacy_root_extension"] == {"keep": True}
@@ -114,7 +114,7 @@ def test_v5_budget_migration_is_deterministic_and_preserves_existing_content():
     repeated, repeated_applied, _ = migrate_to_current(migrated)
 
     assert source_version == 5
-    assert applied == ["v5->v6", "v6->v7"]
+    assert applied == ["v5->v6", "v6->v7", "v7->v8"]
     assert repeated_applied == []
     assert migrated == repeated
     assert migrated["budget"]["base_currency"] == "GBP"
@@ -135,7 +135,7 @@ def test_v6_booking_migration_is_conservative_and_links_existing_costs():
     migrated, applied, source_version = migrate_to_current(legacy)
     repeated, repeated_applied, _ = migrate_to_current(migrated)
     assert source_version == 6
-    assert applied == ["v6->v7"]
+    assert applied == ["v6->v7", "v7->v8"]
     assert repeated_applied == []
     assert migrated == repeated
     rail = next(booking for booking in migrated["bookings"] if booking["id"] == "booking_train_london_paris")
@@ -151,8 +151,8 @@ def test_validate_endpoint_returns_migrated_document():
     body = response.json()
     assert response.status_code == 200
     assert body["valid"] is True
-    assert body["migrations"] == ["v4->v5", "v5->v6", "v6->v7"]
-    assert body["itinerary"]["schema_version"] == 7
+    assert body["migrations"] == ["v4->v5", "v5->v6", "v6->v7", "v7->v8"]
+    assert body["itinerary"]["schema_version"] == 8
     assert isinstance(body["itinerary"]["bookings"][0], dict)
 
 
@@ -163,7 +163,7 @@ def test_import_preview_migrates_in_memory_and_never_saves(tmp_path, monkeypatch
     response = TestClient(itinerary_app.app).post("/api/import-preview", json={"itinerary": legacy})
     body = response.json()
     assert response.status_code == 200 and body["valid"] is True
-    assert body["migrations"] == ["v4->v5", "v5->v6", "v6->v7"]
+    assert body["migrations"] == ["v4->v5", "v5->v6", "v6->v7", "v7->v8"]
     assert target.read_bytes() == before
 
 
@@ -187,8 +187,8 @@ def test_get_migrates_legacy_file_in_memory_without_rewriting(tmp_path, monkeypa
     body = response.json()
 
     assert response.status_code == 200
-    assert body["migrations"] == ["v4->v5", "v5->v6", "v6->v7"]
-    assert body["itinerary"]["schema_version"] == 7
+    assert body["migrations"] == ["v4->v5", "v5->v6", "v6->v7", "v7->v8"]
+    assert body["itinerary"]["schema_version"] == 8
     assert target.read_bytes() == original_bytes
 
 
