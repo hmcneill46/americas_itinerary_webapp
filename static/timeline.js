@@ -87,7 +87,7 @@ function explicitTravelItems(itinerary) {
 }
 
 export function derivePlacesTravelDays(itinerary) {
-  const days = Object.fromEntries((itinerary?.days || []).map(day => [day.date, { stays: [], travel: [], untimedTravel: [] }]));
+  const days = Object.fromEntries((itinerary?.days || []).map(day => [day.date, { stays: [], travel: [], untimedTravel: [], transit: [], day }]));
   const locations = itinerary?.locations || {};
   const visits = [...(itinerary?.visits || [])].sort((a, b) => Number(a.order) - Number(b.order));
   const stays = visits.map(visit => {
@@ -101,7 +101,7 @@ export function derivePlacesTravelDays(itinerary) {
     if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
       for (let cursor = startMs; cursor <= endMs; cursor += DAY_MS) {
         const date = dateKey(cursor);
-        if (days[date]) days[date].stays.push({ itemId: item.id, startMinute: 0, endMinute: 1440 });
+        if (days[date]?.day?.is_physical_location_day) days[date].stays.push({ itemId: item.id, startMinute: 0, endMinute: 1440 });
       }
     }
     return item;
@@ -134,6 +134,16 @@ export function derivePlacesTravelDays(itinerary) {
     travel.push(item); days[visit.start_date].untimedTravel.push({ itemId: item.id });
   }
 
-  const items = new Map([...stays, ...travel].map(item => [item.id, item]));
-  return { days, stays, travel, items };
+  const transit = [];
+  for (const [date, entry] of Object.entries(days)) {
+    if (entry.day?.is_physical_location_day) continue;
+    const item = {
+      id: `transit:${date}`, kind: 'transit', date, title: 'In transit',
+      base: entry.day?.base || '', country: entry.day?.country || '', summary: entry.day?.summary || '',
+      visitId: entry.day?.visit_id || '', locationId: entry.day?.location_id || '',
+    };
+    transit.push(item); entry.transit.push({ itemId: item.id });
+  }
+  const items = new Map([...stays, ...travel, ...transit].map(item => [item.id, item]));
+  return { days, stays, travel, transit, items };
 }

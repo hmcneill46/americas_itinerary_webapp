@@ -259,6 +259,18 @@ Each `cost_items` object has a stable `id`, non-blank `name`, `category_id`, nat
 - `fx.rate_to_base` is the stored number of base-currency units per one native-currency unit. For a foreign currency it is required before that item can contribute to complete base totals. `as_of_date`, `source`, and `note` explain the snapshot. Base-currency items use rate `"1"` or a blank rate. No live FX lookup is performed.
 - Optional `visit_id`, `event_id`, `booking_id`, and `location_id` must refer to existing objects and agree with each other when they overlap. `start_date` and `end_date` are optional in-trip dates. Use blank strings for absent optional references/dates, never `null`.
 
+### Daily Budget reporting
+
+The Budget page always reports whole-item totals. Today derives only the part that can be assigned honestly to its calendar date, using the same exact-decimal helpers:
+
+- `per_day` applies one `unit_amount` on every inclusive date in its explicit range, or across its linked visit when no item range is supplied.
+- `per_night` applies one `unit_amount` from the start date up to, but not including, the end date. The final visit/check-out date has no night.
+- A fixed, per-person, or per-unit item applies on its linked event date first, otherwise its explicit start date. An undated whole-trip item is not assigned to any Today total.
+- A manually quantified `per_day` or `per_night` item is assigned daily only when its quantity exactly matches the corresponding date-range days or nights. If it does not, the whole Budget still includes it, but Today leaves it unallocated rather than inventing a split.
+- Today’s **Recorded today** is only payments, refunds, and signed adjustments whose transaction `date` is that calendar date. It is not the lifetime paid amount of a cost item.
+
+If an applicable item or same-day transaction has no stored FX snapshot, Today marks the relevant base-currency amount incomplete and identifies the affected item count. It never invents an exchange rate.
+
 Expected, committed, and paid are calculated rather than independently stored totals:
 
 - **Expected** = `unit_amount × derived/manual quantity`.

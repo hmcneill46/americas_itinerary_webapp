@@ -1,15 +1,15 @@
 import { loadMapConfig } from './map-config.js?v=map-marker-anchor-1';
 import { buildTripMapModel, routeForDay } from './map-data.js?v=map-marker-anchor-1';
 import { TripMap } from './map-view.js?v=map-marker-anchor-1';
-import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuantity } from './budget.js?v=budget-v5';
-import { deriveBookingAction, groupBookings } from './booking.js?v=booking-v1';
+import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuantity } from './budget.js?v=budget-v6';
+import { deriveBookingAction, groupBookings } from './booking.js?v=booking-v2';
 import { semanticDiff } from './import-diff.js?v=import-v1';
-import { deriveToday } from './today.js?v=today-v1';
+import { deriveToday } from './today.js?v=today-v3';
 import { createSnapshot, readOfflineSnapshot, saveOfflineSnapshot, clearOfflineSnapshot } from './offline-store.js?v=offline-v5';
 import {
   clipFloatingIntervalToDay, derivePlacesTravelDays, filteredEvents, normaliseCategorySelection,
   normaliseScheduleMode, selectionAfterFilter, setCategoryVisibility,
-} from './timeline.js?v=schedule-modes-v4';
+} from './timeline.js?v=schedule-modes-v5';
 
 'use strict';
 
@@ -527,10 +527,12 @@ function placesTravelDayContent(day, model, search) {
   const stays = (model.days[day.date]?.stays || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
   const travel = (model.days[day.date]?.travel || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
   const untimed = (model.days[day.date]?.untimedTravel || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
-  assignLanes(stays); assignLanes(travel);
+  const transit = (model.days[day.date]?.transit || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
+  assignLanes(stays); assignLanes(travel); assignLanes(transit);
   const stayLanes = stays.length ? Math.max(...stays.map(piece => piece.lane)) + 1 : 0;
   const travelLanes = travel.length ? Math.max(...travel.map(piece => piece.lane)) + 1 : 0;
-  const stayTop = 6; const travelTop = stayTop + stayLanes * 28 + (travelLanes ? 7 : 0);
+  const transitLanes = transit.length ? Math.max(...transit.map(piece => piece.lane)) + 1 : 0;
+  const stayTop = 6; const transitTop = stayTop + stayLanes * 28 + (transitLanes ? 7 : 0); const travelTop = transitTop + transitLanes * 28 + (travelLanes ? 7 : 0);
   const untimedTop = travelTop + travelLanes * 28 + (untimed.length ? 7 : 0);
   const height = Math.max(46, untimedTop + untimed.length * 34 + 6);
   const stayHtml = stays.map(piece => {
@@ -542,11 +544,15 @@ function placesTravelDayContent(day, model, search) {
     const outcome = item.outcome === 'planned' ? '' : ` · ${item.outcome}`;
     return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, `place-travel-piece travel-piece transport-mode-${item.modeKey} outcome-${item.outcome}`)}" data-selection-kind="travel" data-selection-id="${escapeHtml(item.id)}" style="left:${left}%;width:${width}%;top:${travelTop + piece.lane * 28}px" title="${escapeHtml(`${item.mode}: ${item.from} → ${item.to}${outcome}`)}"><strong>${escapeHtml(item.mode)}</strong><small>${escapeHtml(`${item.from} → ${item.to}${outcome}`)}</small></button>`;
   }).join('');
+  const transitHtml = transit.map(piece => {
+    const item = piece.item;
+    return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, 'place-travel-piece transit-day-cue')}" data-selection-kind="transit" data-selection-id="${escapeHtml(item.id)}" style="left:0%;width:100%;top:${transitTop + piece.lane * 28}px" title="${escapeHtml(`In transit: ${item.summary || 'no physical location recorded'}`)}"><strong>In transit</strong><small>${escapeHtml(item.summary || 'No physical base recorded for this day')}</small></button>`;
+  }).join('');
   const untimedHtml = untimed.map((piece, index) => {
     const item = piece.item;
     return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, `place-travel-piece untimed-travel-cue transport-mode-${item.modeKey}`)}" data-selection-kind="travel" data-selection-id="${escapeHtml(item.id)}" style="top:${untimedTop + index * 34}px" title="${escapeHtml(`Timing not recorded: ${item.mode}, ${item.from} → ${item.to}`)}"><strong>Timing not recorded</strong><small>${escapeHtml(`${item.mode} · ${item.from} → ${item.to}`)}</small></button>`;
   }).join('');
-  return { html: stayHtml + travelHtml + untimedHtml, height, count: stays.length + travel.length + untimed.length };
+  return { html: stayHtml + transitHtml + travelHtml + untimedHtml, height, count: stays.length + transit.length + travel.length + untimed.length };
 }
 
 function renderDayView() {
@@ -663,6 +669,13 @@ function placeTravelDetailsHtml(item, data, { mobile = false } = {}) {
       ${visit?.notes ? `<div class="details-section"><h3>Visit notes</h3><p>${escapeHtml(visit.notes)}</p></div>` : ''}
       <div class="details-section"><h3>Planned highlights</h3>${notable.length ? `<ul>${notable.map(event => `<li>${escapeHtml(event.title)} · ${escapeHtml(humanDate(event.start.slice(0, 10), { year: false }))}</li>`).join('')}</ul>` : '<p>No activity highlights identified.</p>'}</div>
       <div class="details-section details-actions"><button class="secondary-button" data-place-map-visit="${escapeHtml(item.visitId)}">Show on map</button></div></div>`;
+  }
+  if (item.kind === 'transit') {
+    const travel = data.events.filter(event => event.transport_mode && event.start.slice(0, 10) <= item.date && event.end.slice(0, 10) >= item.date).slice(0, 4);
+    return `<div class="details-card"><div class="details-heading"><div><span class="details-category">Transit day</span><h2 ${mobile ? 'id="timeline-detail-title"' : ''}>In transit</h2><p class="details-kicker">${escapeHtml(item.date)} · no physical location base recorded</p></div>${mobile ? '' : '<button type="button" class="icon-button" data-close-timeline aria-label="Close transit details">×</button>'}</div>
+      <div class="details-time"><strong>${escapeHtml(item.base || 'Travel day')}</strong><span>${escapeHtml(item.country || 'Location not recorded')}</span></div>
+      <div class="details-section"><h3>Day context</h3><p>${escapeHtml(item.summary || 'This day is explicitly marked as not being spent at a physical visit base.')}</p></div>
+      <div class="details-section"><h3>Travel recorded</h3>${travel.length ? `<ul>${travel.map(event => `<li>${escapeHtml(event.title)} · ${escapeHtml(event.transport_mode)}</li>`).join('')}</ul>` : '<p>No exact transport event is recorded for this day.</p>'}</div></div>`;
   }
   const event = data.events.find(candidate => candidate.id === item.eventId); const booking = event ? data.bookings.find(candidate => candidate.event_id === event.id) : null;
   const cost = event ? data.budget.cost_items.find(candidate => candidate.event_id === event.id || (booking && candidate.id === booking.cost_item_id)) : null;
@@ -969,29 +982,37 @@ function budgetBarWidth(value, maximum) {
 }
 
 function budgetRow(row, currency, kind) {
-  const incomplete = row.incomplete ? ' · FX needed' : '';
-  return `<button class="budget-breakdown-row" data-budget-filter-kind="${kind}" data-budget-filter-id="${escapeHtml(row.id)}"><span><strong>${escapeHtml(row.label)}</strong><small>${row.items.length} item${row.items.length === 1 ? '' : 's'}${incomplete}</small></span><span class="amount">${formatMoney(row.expected, currency)}</span></button>`;
+  const missingCount = row.missingFxItems?.length || 0;
+  const incomplete = missingCount ? ` · Incomplete — ${missingCount} item${missingCount === 1 ? '' : 's'} need FX` : '';
+  const amount = row.incomplete ? `${formatMoney(row.expected, currency)} partial` : formatMoney(row.expected, currency);
+  return `<button class="budget-breakdown-row ${row.incomplete ? 'incomplete' : ''}" data-budget-filter-kind="${kind}" data-budget-filter-id="${escapeHtml(row.id)}"><span><strong>${escapeHtml(row.label)}</strong><small>${row.items.length} item${row.items.length === 1 ? '' : 's'}${incomplete}</small></span><span class="amount" aria-label="${escapeHtml(row.incomplete ? `${formatMoney(row.expected, currency)} convertible subtotal; incomplete` : amount)}">${escapeHtml(amount)}</span></button>`;
 }
 
 function renderBudget() {
   const data = currentData(); if (!data?.budget) return;
   const summary = calculateBudget(data); const { totals, baseCurrency } = summary;
   el('budget-toolbar-note').textContent = `Reporting in ${baseCurrency}`;
-  const completeNote = totals.complete ? 'All items have a stored rate.' : `${totals.missingFx.length} item${totals.missingFx.length === 1 ? '' : 's'} need FX.`;
-  const headroom = totals.headroom === null ? 'Needs FX' : formatMoney(totals.headroom, baseCurrency);
+  const missingCount = totals.missingFx.length;
+  const completeNote = totals.complete ? 'All items have a stored rate.' : `${missingCount} item${missingCount === 1 ? '' : 's'} need FX.`;
+  const expectedLabel = totals.complete ? 'Expected total' : 'Expected total incomplete';
+  const expectedNote = totals.complete ? 'Current estimate' : `Convertible subtotal + ${missingCount} unconverted item${missingCount === 1 ? '' : 's'}`;
+  const headroom = totals.headroom === null ? 'Unavailable' : formatMoney(totals.headroom, baseCurrency);
+  const headroomNote = totals.headroom === null ? `Add FX rates for ${missingCount} item${missingCount === 1 ? '' : 's'} to calculate headroom.` : decimalCompare(totals.headroom, '0') < 0 ? 'Over budget' : 'Budget less expected';
   const cards = [
     ['Trip budget', formatMoney(summary.totalBudget, baseCurrency), completeNote, 'emphasis'],
-    ['Expected total', formatMoney(totals.expected, baseCurrency), totals.complete ? 'Current estimate' : 'Partial — FX missing', ''],
-    ['Committed', formatMoney(totals.committed, baseCurrency), 'Reservations and obligations', ''],
-    ['Paid / spent', formatMoney(totals.paid, baseCurrency), 'Payments less refunds', ''],
+    [expectedLabel, formatMoney(totals.expected, baseCurrency), expectedNote, totals.complete ? '' : 'incomplete'],
+    [totals.complete ? 'Committed' : 'Committed subtotal', formatMoney(totals.committed, baseCurrency), totals.complete ? 'Reservations and obligations' : `Convertible subtotal; ${missingCount} item${missingCount === 1 ? '' : 's'} need FX`, ''],
+    [totals.complete ? 'Paid / spent' : 'Paid / spent subtotal', formatMoney(totals.paid, baseCurrency), totals.complete ? 'Payments less refunds' : `Convertible subtotal; ${missingCount} item${missingCount === 1 ? '' : 's'} need FX`, ''],
     ['Expected still to spend', formatMoney(totals.expectedStillToSpend, baseCurrency), 'Expected less paid', ''],
     ['Expected, not committed', formatMoney(totals.expectedUncommitted, baseCurrency), 'Flexible estimate', ''],
     ['Committed, not paid', formatMoney(totals.committedUnpaid, baseCurrency), 'Balances still due', ''],
-    ['Budget headroom', headroom, totals.headroom !== null && decimalCompare(totals.headroom, '0') < 0 ? 'Over budget' : 'Budget less expected', 'emphasis'],
+    ['Budget headroom', headroom, headroomNote, totals.headroom === null ? 'emphasis incomplete' : 'emphasis'],
   ].map(([label, value, note, className]) => `<article class="budget-card ${className}"><small>${label}</small><strong>${value}</strong><p>${note}</p></article>`).join('');
   const max = summary.totalBudget;
   const expectedWidth = budgetBarWidth(totals.expected, max); const committedWidth = budgetBarWidth(totals.committed, max); const paidWidth = budgetBarWidth(totals.paid, max);
-  const warnings = summary.warnings.length ? `<div class="budget-warning"><strong>Check budget data:</strong> ${summary.warnings.slice(0, 3).map(warning => warning.kind === 'missing_fx' ? `${escapeHtml(warning.item.name)} needs an FX rate.` : warning.kind === 'over_budget' ? 'Expected cost exceeds the trip budget.' : `${escapeHtml(warning.item.name)} needs a value review.`).join(' ')}</div>` : '';
+  const missingFxWarnings = summary.warnings.filter(warning => warning.kind === 'missing_fx');
+  const valueWarnings = summary.warnings.filter(warning => warning.kind !== 'missing_fx');
+  const warnings = `${missingFxWarnings.length ? `<div class="budget-warning budget-warning-fx" role="status"><strong>FX rates needed to complete this Budget</strong><p>${escapeHtml(`${missingFxWarnings.length} item${missingFxWarnings.length === 1 ? '' : 's'} cannot yet be included in complete base-currency totals or headroom.`)}</p><div class="budget-warning-actions">${missingFxWarnings.map(warning => `<button class="linkish-button" data-add-fx="${escapeHtml(warning.item.id)}">${escapeHtml(warning.item.name)} — add FX</button>`).join('')}</div></div>` : ''}${valueWarnings.length ? `<div class="budget-warning"><strong>Check budget data:</strong> ${valueWarnings.slice(0, 3).map(warning => warning.kind === 'over_budget' ? 'Expected cost exceeds the trip budget.' : `${escapeHtml(warning.item.name)} needs a value review.`).join(' ')}</div>` : ''}`;
   const filterText = state.budgetSearch.trim().toLowerCase();
   const displayed = summary.items.filter(item => (!state.budgetCategoryFilter || item.category_id === state.budgetCategoryFilter || item.visit_id === state.budgetCategoryFilter) && (!filterText || `${item.name} ${item.notes} ${budgetReference(item, data)}`.toLowerCase().includes(filterText)));
   const categoryOptions = data.budget.categories.map(category => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`).join('');
@@ -1002,14 +1023,17 @@ function renderBudget() {
     const paid = `${formatMoney(item.paidAmount, item.currency)} paid`;
     const quantity = visitQuantity(item, data);
     const basis = item.expected.basis === 'fixed' ? 'Fixed' : `${formatMoney(item.expected.unit_amount, item.currency)} ${item.expected.basis.replace('_', ' ')} × ${quantity} = ${formatMoney(item.expectedAmount, item.currency)}`;
-    return `<article class="budget-item"><div class="budget-item-main"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(budgetReference(item, data))} · ${escapeHtml(native)} · ${escapeHtml(basis)}</small><span class="budget-item-tag">${escapeHtml(category?.name || item.category_id)}</span></div><div class="budget-amount-stack"><span>Base expected</span><strong>${baseAmount}</strong></div><div class="budget-amount-stack"><span>Committed / paid</span><strong>${formatMoney(item.committed_amount, item.currency)} / ${escapeHtml(paid)}</strong></div><div class="budget-item-actions"><button class="secondary-button small" data-edit-cost="${escapeHtml(item.id)}">Edit</button></div></article>`;
+    return `<article class="budget-item ${item.base ? '' : 'incomplete'}"><div class="budget-item-main"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(budgetReference(item, data))} · ${escapeHtml(native)} · ${escapeHtml(basis)}</small><span class="budget-item-tag">${escapeHtml(category?.name || item.category_id)}</span></div><div class="budget-amount-stack"><span>${item.base ? 'Base expected' : 'Base expected incomplete'}</span><strong>${escapeHtml(baseAmount)}</strong></div><div class="budget-amount-stack"><span>Committed / paid</span><strong>${formatMoney(item.committed_amount, item.currency)} / ${escapeHtml(paid)}</strong></div><div class="budget-item-actions">${item.base ? '' : `<button class="secondary-button small" data-add-fx="${escapeHtml(item.id)}">Add FX</button>`}<button class="secondary-button small" data-edit-cost="${escapeHtml(item.id)}">Edit</button></div></article>`;
   }).join('') : '<div class="budget-empty">No cost items match this filter. Add an estimate or record a quick expense.</div>';
-  el('budget-content').innerHTML = `<section class="budget-summary-grid">${cards}</section><section class="budget-coverage"><div class="budget-coverage-head"><strong>Expected, committed and paid against the trip budget</strong><span>${completeNote}</span></div><div class="budget-track" aria-label="Budget coverage"><span class="expected" style="width:${expectedWidth}%"></span><span class="committed" style="width:${committedWidth}%"></span><span class="paid" style="width:${paidWidth}%"></span></div><div class="budget-key"><span class="expected"><i></i>Expected ${formatMoney(totals.expected, baseCurrency)}</span><span class="committed"><i></i>Committed ${formatMoney(totals.committed, baseCurrency)}</span><span class="paid"><i></i>Paid ${formatMoney(totals.paid, baseCurrency)}</span></div></section>${warnings}<section class="budget-grid"><article class="budget-section"><h2>Where the expected cost goes</h2><p>Tap a category to filter the underlying items.</p><div class="budget-breakdown">${summary.categories.map(row => budgetRow(row, baseCurrency, 'category')).join('') || '<div class="budget-empty">No cost items yet.</div>'}</div></article><article class="budget-section"><h2>By visit and whole-trip costs</h2><p>Repeated visits stay separate.</p><div class="budget-breakdown">${summary.visits.map(row => budgetRow(row, baseCurrency, 'visit')).join('') || '<div class="budget-empty">No visit-linked costs yet.</div>'}</div></article></section><section class="budget-section budget-items-section"><div class="budget-items-toolbar"><div><h2>Cost items</h2><p>Expected, commitment and payment history in one place.</p></div><input id="budget-search" type="search" value="${escapeHtml(state.budgetSearch)}" placeholder="Search costs or places"><select id="budget-category-filter"><option value="">All categories and visits</option>${categoryOptions}</select></div><div id="budget-items" class="budget-items">${items}</div></section>`;
+  const coverageLabel = totals.complete ? 'Expected, committed and paid against the trip budget' : 'Convertible base-currency subtotal — unconverted items are excluded';
+  const keyPrefix = totals.complete ? '' : 'Convertible ';
+  el('budget-content').innerHTML = `<section class="budget-summary-grid">${cards}</section><section class="budget-coverage ${totals.complete ? '' : 'incomplete'}"><div class="budget-coverage-head"><strong>${coverageLabel}</strong><span>${completeNote}</span></div><div class="budget-track" aria-label="Budget coverage"><span class="expected" style="width:${expectedWidth}%"></span><span class="committed" style="width:${committedWidth}%"></span><span class="paid" style="width:${paidWidth}%"></span></div><div class="budget-key"><span class="expected"><i></i>${keyPrefix}expected ${formatMoney(totals.expected, baseCurrency)}</span><span class="committed"><i></i>${keyPrefix}committed ${formatMoney(totals.committed, baseCurrency)}</span><span class="paid"><i></i>${keyPrefix}paid ${formatMoney(totals.paid, baseCurrency)}</span></div></section>${warnings}<section class="budget-grid"><article class="budget-section"><h2>Where the expected cost goes</h2><p>Tap a category to filter the underlying items.</p><div class="budget-breakdown">${summary.categories.map(row => budgetRow(row, baseCurrency, 'category')).join('') || '<div class="budget-empty">No cost items yet.</div>'}</div></article><article class="budget-section"><h2>By visit and whole-trip costs</h2><p>Repeated visits stay separate.</p><div class="budget-breakdown">${summary.visits.map(row => budgetRow(row, baseCurrency, 'visit')).join('') || '<div class="budget-empty">No visit-linked costs yet.</div>'}</div></article></section><section class="budget-section budget-items-section"><div class="budget-items-toolbar"><div><h2>Cost items</h2><p>Expected, commitment and payment history in one place.</p></div><input id="budget-search" type="search" value="${escapeHtml(state.budgetSearch)}" placeholder="Search costs or places"><select id="budget-category-filter"><option value="">All categories and visits</option>${categoryOptions}</select></div><div id="budget-items" class="budget-items">${items}</div></section>`;
   el('budget-category-filter').value = data.budget.categories.some(category => category.id === state.budgetCategoryFilter) ? state.budgetCategoryFilter : '';
   el('budget-search').addEventListener('input', event => { state.budgetSearch = event.target.value; renderBudget(); });
   el('budget-category-filter').addEventListener('change', event => { state.budgetCategoryFilter = event.target.value; renderBudget(); });
   document.querySelectorAll('[data-budget-filter-id]').forEach(button => button.addEventListener('click', () => { state.budgetCategoryFilter = button.dataset.budgetFilterId; state.budgetSearch = ''; renderBudget(); document.querySelector('.budget-items-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
   document.querySelectorAll('[data-edit-cost]').forEach(button => button.addEventListener('click', () => openCostDialog(data.budget.cost_items.find(item => item.id === button.dataset.editCost))));
+  document.querySelectorAll('[data-add-fx]').forEach(button => button.addEventListener('click', () => openCostDialog(data.budget.cost_items.find(item => item.id === button.dataset.addFx), { focusFx: true })));
 }
 
 function budgetOptions(items, selected, blankLabel = '—') { return `<option value="">${blankLabel}</option>${items.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === selected ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}`; }
@@ -1025,7 +1049,7 @@ function updateCostExpectedPreview() {
   try { el('cost-expected-preview').textContent = basis === 'fixed' ? `Expected total: ${formatMoney(unit, el('cost-currency').value.toUpperCase() || '???')}` : `Expected: ${formatMoney(unit, el('cost-currency').value.toUpperCase() || '???')} × ${quantity}`; } catch { el('cost-expected-preview').textContent = 'Enter an exact decimal amount.'; }
 }
 
-function openCostDialog(existing = null) {
+function openCostDialog(existing = null, { focusFx = false } = {}) {
   const data = currentData(); const budget = data.budget;
   state.costDialogItem = deepClone(existing || { id: '', name: '', category_id: budget.categories[0]?.id || 'miscellaneous', currency: budget.base_currency, expected: { unit_amount: '', basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '0', fx: { rate_to_base: budget.base_currency === 'USD' ? '1' : '', as_of_date: '', source: '', note: '' }, payments: [], visit_id: '', event_id: '', booking_id: '', location_id: '', start_date: '', end_date: '', notes: '' });
   const item = state.costDialogItem;
@@ -1035,6 +1059,7 @@ function openCostDialog(existing = null) {
   el('cost-visit').innerHTML = budgetOptions(sortedVisits(data).map(visit => ({ id: visit.id, label: `Visit ${visit.order} · ${getLocation(visit.location_id, data)?.name || visit.location_id}` })), item.visit_id); el('cost-event').innerHTML = budgetOptions(sortedEvents(data).map(event => ({ id: event.id, label: event.title })), item.event_id); el('cost-booking').innerHTML = budgetOptions(data.bookings.map(booking => ({ id: booking.id, label: booking.title })), item.booking_id); el('cost-location').innerHTML = budgetOptions(Object.values(data.locations).map(location => ({ id: location.id, label: `${location.name} · ${location.country}` })), item.location_id);
   el('delete-cost-button').hidden = !existing; el('cost-quantity').disabled = item.expected.quantity_source !== 'manual';
   renderCostPayments(); updateCostExpectedPreview(); el('cost-dialog').showModal();
+  if (focusFx) requestAnimationFrame(() => { el('cost-fx-rate').scrollIntoView({ block: 'center' }); el('cost-fx-rate').focus(); });
 }
 
 function applyCostDialog() {
@@ -1548,7 +1573,19 @@ function downloadDraft() {
 }
 
 /* ---------------- AI handoff / safe import ---------------- */
-function renderToday() { const data=currentData(); const now=localNowFloating(); const model=deriveToday(data,now); const eventCard=event=>event?`<article class="today-event"><span>${escapeHtml(event.outcome||'planned')}</span><h3>${escapeHtml(event.title)}</h3><strong>${escapeHtml((event.actual_start||event.start).slice(11,16))}–${escapeHtml((event.actual_end||event.end).slice(11,16))}</strong><p>${escapeHtml(event.notes||'')}</p><div><button class="secondary-button small" data-today-outcome="completed" data-today-event="${escapeHtml(event.id)}">Mark completed</button><button class="secondary-button small" data-today-outcome="missed" data-today-event="${escapeHtml(event.id)}">Missed</button></div></article>`:'<article class="today-event empty"><h3>Nothing scheduled</h3><p>Enjoy the free time, or add a real-world update.</p></article>'; const schedule=model.events.map(event=>eventCard(event)).join('')||'<div class="budget-empty">No events planned for this calendar day.</div>'; const tonight=model.accommodation?`${model.accommodation.title} · ${model.accommodation.outcome||'planned'}`:'No accommodation identified for tonight'; el('today-content').innerHTML=`<section class="today-hero"><div><small>${escapeHtml(model.today)}</small><h2>${escapeHtml(model.day?.base||'Outside the trip itinerary')}</h2><p>${escapeHtml(model.day?`Day ${model.day.day_number} · ${model.day.country}`:'Check the trip dates or choose another view.')}</p></div><button id="today-quick-expense" class="secondary-button">+ Expense</button></section><section class="today-grid"><div><h2>Now</h2>${eventCard(model.active)}</div><div><h2>Next</h2>${eventCard(model.next)}</div><div><h2>Tonight</h2><article class="today-event"><h3>${escapeHtml(tonight)}</h3></article></div><div><h2>Needs attention</h2><article class="today-event"><p>${model.attention.length?escapeHtml(model.attention.map(item=>item.booking.title).join(' · ')):'No urgent booking action today.'}</p></article></div></section><section class="budget-section today-schedule"><h2>Today’s schedule</h2><p>Expected ${escapeHtml(model.money.currency)} ${model.money.expected.toFixed(2)} · recorded ${escapeHtml(model.money.currency)} ${model.money.paid.toFixed(2)}</p>${schedule}</section>`; document.querySelectorAll('[data-today-event]').forEach(button=>button.addEventListener('click',()=>{const event=data.events.find(item=>item.id===button.dataset.todayEvent); event.outcome=button.dataset.todayOutcome; event.outcome_note=button.dataset.todayOutcome==='missed'?'Recorded in Today view.':''; markDirty(`${event.title}: ${event.outcome}`); renderToday();})); el('today-quick-expense').addEventListener('click',()=>{switchTab('budget');el('quick-expense-button').click();}); }
+function renderToday() {
+  const data = currentData(); const now = localNowFloating(); const model = deriveToday(data, now);
+  const eventCard = event => event ? `<article class="today-event"><span>${escapeHtml(event.outcome || 'planned')}</span><h3>${escapeHtml(event.title)}</h3><strong>${escapeHtml((event.actual_start || event.start).slice(11, 16))}–${escapeHtml((event.actual_end || event.end).slice(11, 16))}</strong><p>${escapeHtml(event.notes || '')}</p><div><button class="secondary-button small" data-today-outcome="completed" data-today-event="${escapeHtml(event.id)}">Mark completed</button><button class="secondary-button small" data-today-outcome="missed" data-today-event="${escapeHtml(event.id)}">Missed</button></div></article>` : '<article class="today-event empty"><h3>Nothing scheduled</h3><p>Enjoy the free time, or add a real-world update.</p></article>';
+  const schedule = model.events.map(event => eventCard(event)).join('') || '<div class="budget-empty">No events planned for this calendar day.</div>';
+  const tonight = model.accommodation ? `${model.accommodation.title} · ${model.accommodation.outcome || 'planned'}` : 'No accommodation identified for tonight';
+  const expectedMissing = model.money.missingFx.filter(entry => entry.expected).length;
+  const recordedMissing = model.money.missingFx.filter(entry => entry.recorded).length;
+  const expectedNote = model.money.expectedComplete ? 'Applicable estimates for this calendar day.' : `Incomplete — ${expectedMissing} applicable item${expectedMissing === 1 ? '' : 's'} need FX.`;
+  const recordedNote = model.money.recordedComplete ? 'Payments, refunds, and adjustments dated today.' : `Incomplete — ${recordedMissing} recorded item${recordedMissing === 1 ? '' : 's'} need FX.`;
+  el('today-content').innerHTML = `<section class="today-hero"><div><small>${escapeHtml(model.today)}</small><h2>${escapeHtml(model.day?.base || 'Outside the trip itinerary')}</h2><p>${escapeHtml(model.day ? `Day ${model.day.day_number} · ${model.day.country}` : 'Check the trip dates or choose another view.')}</p></div><button id="today-quick-expense" class="secondary-button">+ Expense</button></section><section class="today-grid"><div><h2>Now</h2>${eventCard(model.active)}</div><div><h2>Next</h2>${eventCard(model.next)}</div><div><h2>Tonight</h2><article class="today-event"><h3>${escapeHtml(tonight)}</h3></article></div><div><h2>Needs attention</h2><article class="today-event"><p>${model.attention.length ? escapeHtml(model.attention.map(item => item.booking.title).join(' · ')) : 'No urgent booking action today.'}</p></article></div></section><section class="budget-section today-schedule"><h2>Today’s schedule</h2><div class="today-money"><div class="${model.money.expectedComplete ? '' : 'incomplete'}"><small>Expected today</small><strong>${escapeHtml(formatMoney(model.money.expected, model.money.currency))}</strong><p>${escapeHtml(expectedNote)}</p></div><div class="${model.money.recordedComplete ? '' : 'incomplete'}"><small>Recorded today</small><strong>${escapeHtml(formatMoney(model.money.recorded, model.money.currency))}</strong><p>${escapeHtml(recordedNote)}</p></div></div>${schedule}</section>`;
+  document.querySelectorAll('[data-today-event]').forEach(button => button.addEventListener('click', () => { const event = data.events.find(item => item.id === button.dataset.todayEvent); event.outcome = button.dataset.todayOutcome; event.outcome_note = button.dataset.todayOutcome === 'missed' ? 'Recorded in Today view.' : ''; markDirty(`${event.title}: ${event.outcome}`); renderToday(); }));
+  el('today-quick-expense').addEventListener('click', () => { switchTab('budget'); el('quick-expense-button').click(); });
+}
 const AI_HANDOFF_TEXT = `You are modifying a Trip Planner itinerary JSON document. Return one complete valid JSON document only (not a patch or Markdown). Preserve schema_version and stable IDs whenever an entity is modified. Keep event timestamps as floating local YYYY-MM-DDTHH:MM values with no Z or UTC offset. Keep exact money and FX values as decimal strings. Preserve expected, committed and paid as distinct Budget concepts; booking lifecycle and booking timing are distinct. Do not add secrets, card data, or javascript: URLs.`;
 async function clearOfflineTripData() {
   if (!confirm('Remove this device\'s saved offline trip copy? This never changes the itinerary on your home server.')) return;

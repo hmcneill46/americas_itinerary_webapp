@@ -6,7 +6,7 @@ import {
   normaliseScheduleMode, selectionAfterFilter, setCategoryVisibility, transportStyleKey,
 } from '../static/timeline.js';
 
-const day = date => ({ date, base: '', country: '', summary: '', notes: '', confidence: 'High', day_number: 1 });
+const day = date => ({ date, base: '', country: '', summary: '', notes: '', confidence: 'High', day_number: 1, is_physical_location_day: true });
 const itinerary = {
   schema_version: 8,
   metadata: { start_date: '2027-04-01', end_date: '2027-04-10' },
@@ -63,6 +63,19 @@ test('Places & travel expands long and repeated visits into truthful day rows', 
   assert.equal(model.days['2027-04-05'].stays[0].itemId, 'stay:visit_a_1');
   assert.equal(model.days['2027-04-08'].stays[0].itemId, 'stay:visit_a_2');
   assert.deepEqual(model.stays.map(item => `${item.name}:${item.country}`), ['Alpha:One', 'Beta:Two', 'Alpha:One']);
+});
+
+test('Places & travel does not present a non-physical transit day as a full location stay', () => {
+  const transitItinerary = structuredClone(itinerary);
+  transitItinerary.days.find(entry => entry.date === '2027-04-04').is_physical_location_day = false;
+  transitItinerary.days.find(entry => entry.date === '2027-04-04').base = 'In transit';
+  const model = derivePlacesTravelDays(transitItinerary);
+  assert.equal(model.days['2027-04-03'].stays.length, 1, 'normal physical days retain the stay');
+  assert.equal(model.days['2027-04-04'].stays.length, 0, 'explicit non-physical day suppresses the 00:00–24:00 stay');
+  assert.equal(model.days['2027-04-04'].transit.length, 1);
+  const cue = model.items.get(model.days['2027-04-04'].transit[0].itemId);
+  assert.equal(cue.kind, 'transit');
+  assert.equal(model.days['2027-04-04'].travel.some(piece => piece.itemId === 'travel:long_trek'), true, 'explicit multi-day travel remains visible');
 });
 
 test('overnight and multi-day travel clip across each 24-hour row using actual times', () => {

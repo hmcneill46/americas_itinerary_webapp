@@ -37,6 +37,27 @@ test('before-departure, on-arrival, flexible and completed lifecycle groups rema
   assert.equal(deriveBookingAction(items[3], example, '2027-04-10').actionable, false);
 });
 
+test('actionable before-departure bookings become overdue on trip start and remain urgent afterward', () => {
+  const item = booking('booking_airport_transfer');
+  item.lifecycle = 'ready_to_book'; item.timing.strategy = 'before_departure'; item.timing.hard_deadline = '';
+  let action = deriveBookingAction(item, example, '2027-04-07');
+  assert.equal(action.bucket, 'before_departure');
+  action = deriveBookingAction(item, example, '2027-04-08');
+  assert.equal(action.bucket, 'urgent');
+  assert.equal(action.beforeDepartureOverdue, true);
+  assert.match(action.timingLabel, /trip has already started/i);
+  assert.ok(action.reasons.some(reason => /intended to be booked before departure/i.test(reason)));
+  action = deriveBookingAction(item, example, '2027-04-12');
+  assert.equal(action.bucket, 'urgent');
+  item.timing.hard_deadline = '2027-04-09';
+  action = deriveBookingAction(item, example, '2027-04-12');
+  assert.equal(action.deadlineMissed, true);
+  item.lifecycle = 'booked';
+  assert.equal(deriveBookingAction(item, example, '2027-04-12').bucket, 'booked');
+  item.lifecycle = 'cancelled';
+  assert.equal(deriveBookingAction(item, example, '2027-04-12').bucket, 'secondary');
+});
+
 test('budget links retain deposits and allow committed or paid amounts above earlier estimates', () => {
   const itinerary = clone(example); const cost = itinerary.budget.cost_items.find(item => item.id === 'cost_paris_museum');
   cost.committed_amount = '30'; cost.payments.push({ id: 'payment_more_than_estimate', kind: 'payment', amount: '35', date: '2027-02-01', note: 'Actual price changed' });

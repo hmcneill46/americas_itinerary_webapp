@@ -1,6 +1,39 @@
 /* Portable, exact-decimal budget calculations. Values remain JSON strings; no float is authoritative. */
 
 const DECIMAL_RE = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const DAY_MS = 86_400_000;
+
+function dateMs(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : NaN;
+}
+
+function datesBetweenInclusive(start, end) {
+  const startMs = dateMs(start); const endMs = dateMs(end);
+  return Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs ? Math.round((endMs - startMs) / DAY_MS) + 1 : 0;
+}
+
+function dateWithinInclusive(value, start, end) { return Boolean(value && start && end && value >= start && value <= end); }
+
+function costScope(item, itinerary, { preferEvent = false } = {}) {
+  const event = (itinerary.events || []).find(candidate => candidate.id === item.event_id);
+  if (preferEvent && event?.start) {
+    const date = String(event.start).slice(0, 10);
+    return { start: date, end: date, source: 'event' };
+  }
+  if (item.start_date || item.end_date) {
+    const start = item.start_date || item.end_date;
+    const end = item.end_date || item.start_date;
+    return { start, end, source: 'item_dates' };
+  }
+  const visit = (itinerary.visits || []).find(candidate => candidate.id === item.visit_id);
+  if (visit) return { start: visit.start_date, end: visit.end_date, source: 'visit' };
+  if (event?.start) {
+    const date = String(event.start).slice(0, 10);
+    return { start: date, end: date, source: 'event' };
+  }
+  return null;
+}
 
 function parts(value) {
   const text = String(value ?? '0');
@@ -77,6 +110,64 @@ export function itemBaseRate(item, baseCurrency) {
   return item.fx?.rate_to_base || '';
 }
 
+/* A daily allocation is deliberately conservative. Per-day coverage is inclusive;
+ * per-night coverage is start-inclusive/end-exclusive (checkout day has no night).
+ * A manual quantity only becomes a day allocation when it exactly matches that
+ * date range. Otherwise the full Budget remains authoritative and Today leaves
+ * the item unallocated rather than inventing a daily split. */
+export function expectedForCalendarDate(item, itinerary, date) {
+  const basis = item.expected?.basis;
+  if (basis === 'fixed' || basis === 'per_person' || basis === 'per_unit') {
+    const scope = costScope(item, itinerary, { preferEvent: Boolean(item.event_id) });
+    return scope && date === scope.start ? itemExpected(item, itinerary) : null;
+  }
+  if (basis !== 'per_day' && basis !== 'per_night') return null;
+  const scope = costScope(item, itinerary);
+  if (!scope) return null;
+  const coveredUnits = basis === 'per_day' ? datesBetweenInclusive(scope.start, scope.end) : Math.max(0, datesBetweenInclusive(scope.start, scope.end) - 1);
+  if (coveredUnits < 1 || decimalCompare(visitQuantity(item, itinerary), String(coveredUnits)) !== 0) return null;
+  const applies = basis === 'per_day' ? dateWithinInclusive(date, scope.start, scope.end) : Boolean(date && date >= scope.start && date < scope.end);
+  return applies ? item.expected.unit_amount : null;
+}
+
+export function paymentsForCalendarDate(item, date) {
+  return (item.payments || []).filter(payment => payment.date === date);
+}
+
+export function paymentNetForCalendarDate(item, date) {
+  return paymentsForCalendarDate(item, date).reduce((total, payment) => decimalAdd(total, payment.kind === 'refund' ? decimalNegate(payment.amount) : payment.amount), '0');
+}
+
+export function calculateTodayMoney(itinerary, date) {
+  const budget = itinerary?.budget || { base_currency: 'USD', cost_items: [] };
+  const baseCurrency = budget.base_currency;
+  const missing = new Map();
+  const result = {
+    currency: baseCurrency, expected: '0', recorded: '0', expectedComplete: true, recordedComplete: true,
+    expectedItems: [], recordedItems: [], missingFx: [],
+  };
+  const add = (kind, item, amount) => {
+    if (decimalCompare(amount, '0') === 0) return;
+    const rate = itemBaseRate(item, baseCurrency);
+    if (!rate) {
+      result[`${kind}Complete`] = false;
+      const entry = missing.get(item.id) || { item, expected: false, recorded: false };
+      entry[kind] = true; missing.set(item.id, entry);
+      return;
+    }
+    result[kind] = decimalAdd(result[kind], decimalMultiply(amount, rate));
+  };
+  for (const item of budget.cost_items || []) {
+    const expected = expectedForCalendarDate(item, itinerary, date);
+    if (expected !== null) { result.expectedItems.push({ item, amount: expected }); add('expected', item, expected); }
+    const recorded = paymentNetForCalendarDate(item, date);
+    if (decimalCompare(recorded, '0') !== 0) { result.recordedItems.push({ item, amount: recorded }); add('recorded', item, recorded); }
+  }
+  result.missingFx = [...missing.values()];
+  result.complete = result.expectedComplete && result.recordedComplete;
+  return result;
+}
+
 function emptyTotals() {
   return { expected: '0', committed: '0', paid: '0', expectedStillToSpend: '0', expectedUncommitted: '0', committedUnpaid: '0', complete: true, missingFx: [] };
 }
@@ -121,9 +212,9 @@ export function calculateBudget(itinerary) {
     const visitLocation = itemVisit ? itinerary.locations?.[itemVisit.location_id] : null;
     const visitLabel = itemVisit ? `${visitLocation?.name || itemVisit.location_id} · Visit ${itemVisit.order}` : 'Whole trip';
     for (const [key, map, label] of [[item.category_id, byCategory, categoryById.get(item.category_id)?.name || item.category_id], [item.visit_id || 'trip', byVisit, visitLabel]]) {
-      const row = map.get(key) || { id: key, label, expected: '0', committed: '0', paid: '0', incomplete: false, items: [] };
+      const row = map.get(key) || { id: key, label, expected: '0', committed: '0', paid: '0', incomplete: false, missingFxItems: [], items: [] };
       row.items.push(item);
-      if (!item.base) row.incomplete = true;
+      if (!item.base) { row.incomplete = true; row.missingFxItems.push(item); }
       else { row.expected = decimalAdd(row.expected, item.base.expected); row.committed = decimalAdd(row.committed, item.base.committed); row.paid = decimalAdd(row.paid, item.base.paid); }
       map.set(key, row);
     }

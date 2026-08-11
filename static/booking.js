@@ -39,7 +39,9 @@ export function deriveBookingAction(booking, itinerary, today) {
   const deadlineDays = hardDeadline ? calendarDaysBetween(today, hardDeadline) : null;
   const recommendedDays = recommendedDate ? calendarDaysBetween(today, recommendedDate) : null;
   const deadlineMissed = deadlineDays !== null && deadlineDays < 0;
-  const overdue = recommendedDays !== null && recommendedDays < 0;
+  const tripStarted = Boolean(itinerary.metadata?.start_date && today >= itinerary.metadata.start_date);
+  const beforeDepartureOverdue = actionable && strategy === 'before_departure' && tripStarted;
+  const overdue = (recommendedDays !== null && recommendedDays < 0) || beforeDepartureOverdue;
 
   let bucket = 'later';
   if (!actionable) bucket = lifecycle === 'booked' ? 'booked' : 'secondary';
@@ -52,7 +54,7 @@ export function deriveBookingAction(booking, itinerary, today) {
 
   let timingLabel = 'Timing not researched yet';
   if (strategy === 'book_now') timingLabel = 'Book now';
-  else if (strategy === 'before_departure') timingLabel = 'Book before departure';
+  else if (strategy === 'before_departure') timingLabel = beforeDepartureOverdue ? 'Overdue — trip has already started' : 'Book before departure';
   else if (strategy === 'on_arrival') timingLabel = 'Arrange on arrival';
   else if (strategy === 'flexible') timingLabel = 'Intentionally flexible';
   else if (recommendedDate) timingLabel = recommendedDays === 0 ? 'Recommended today' : recommendedDays !== null && recommendedDays > 0 ? `Recommended in ${recommendedDays} days` : `Recommended ${Math.abs(recommendedDays || 0)} days ago`;
@@ -60,12 +62,13 @@ export function deriveBookingAction(booking, itinerary, today) {
 
   const reasons = [];
   if (deadlineMissed) reasons.push('Hard deadline has passed');
+  if (beforeDepartureOverdue) reasons.push('Trip has already started; this was intended to be booked before departure.');
   else if (overdue) reasons.push('Recommended booking point has passed');
   if (timing.sell_out_risk === 'high') reasons.push('High sell-out risk');
   if (timing.price_rise_risk === 'high') reasons.push('High price-rise risk');
   if (strategy === 'flexible' || timing.flexibility_value === 'high') reasons.push('Flexibility is valuable');
   if (timing.rationale) reasons.push(timing.rationale);
-  return { actionable, lifecycle, strategy, anchor, recommendedDate, hardDeadline, deadlineMissed, overdue, bucket, timingLabel, reasons, recommendedDays, deadlineDays };
+  return { actionable, lifecycle, strategy, anchor, recommendedDate, hardDeadline, deadlineMissed, beforeDepartureOverdue, overdue, bucket, timingLabel, reasons, recommendedDays, deadlineDays };
 }
 
 export function groupBookings(bookings, itinerary, today) {
