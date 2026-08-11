@@ -1,8 +1,8 @@
-const CACHE_NAME = 'trip-planner-shell-v9';
+const CACHE_NAME = 'trip-planner-shell-v10';
 const APP_SHELL = [
   '/', '/static/index.html', '/static/styles.css?v=budget-clarity-v2',
-  '/static/app.js?v=budget-clarity-v2', '/static/offline-store.js?v=offline-v5',
-  '/static/budget.js?v=budget-v6', '/static/booking.js?v=booking-v2',
+  '/static/app.js?v=budget-metrics-v1', '/static/offline-store.js?v=offline-v5',
+  '/static/budget.js?v=budget-v7', '/static/booking.js?v=booking-v2',
   '/static/import-diff.js?v=import-v1', '/static/today.js?v=today-v3',
   '/static/timeline.js?v=schedule-modes-v5',
   '/static/map-config.js?v=map-marker-anchor-1', '/static/map-data.js?v=map-marker-anchor-1',

@@ -106,10 +106,48 @@ test('Today and Budget preserve incomplete FX explicitly until a rate is supplie
   let budget = calculateBudget(itinerary);
   assert.equal(budget.totals.complete, false);
   assert.equal(budget.totals.headroom, null);
-  assert.equal(budget.categories[0].incomplete, true);
-  assert.equal(budget.categories[0].missingFxItems.length, 1);
+  assert.equal(budget.categories[0].completeness.expected.complete, false);
+  assert.equal(budget.categories[0].completeness.expected.missingFx.length, 1);
   ars.fx.rate_to_base = '0.0007';
   budget = calculateBudget(itinerary);
   assert.equal(budget.totals.complete, true);
   assert.notEqual(budget.totals.headroom, null);
+});
+
+test('Budget tracks FX completeness per metric and ignores zero contributions', () => {
+  const itinerary = dailyItinerary();
+  const item = { id: 'ars_estimate', name: 'Unbooked local activity', category_id: 'activity', currency: 'ARS', expected: { unit_amount: '50000', basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '0', fx: { rate_to_base: '' }, payments: [], visit_id: '', event_id: '', start_date: '2027-04-03', end_date: '' };
+  itinerary.budget.cost_items = [item];
+  let summary = calculateBudget(itinerary);
+  const completeness = summary.totals.completeness;
+  assert.equal(completeness.expected.complete, false);
+  assert.equal(completeness.expectedStillToSpend.complete, false);
+  assert.equal(completeness.expectedUncommitted.complete, false);
+  assert.equal(completeness.committed.complete, true);
+  assert.equal(completeness.paid.complete, true);
+  assert.equal(completeness.committedUnpaid.complete, true);
+  assert.equal(summary.totals.headroom, null);
+  assert.equal(summary.categories[0].completeness.expected.complete, false);
+
+  item.committed_amount = '20000';
+  summary = calculateBudget(itinerary);
+  assert.equal(summary.totals.completeness.committed.complete, false);
+  assert.equal(summary.totals.completeness.committedUnpaid.complete, false);
+
+  item.payments.push({ id: 'paid', kind: 'payment', amount: '20000', date: '2027-04-03' });
+  summary = calculateBudget(itinerary);
+  assert.equal(summary.totals.completeness.paid.complete, false);
+  assert.equal(summary.totals.completeness.committedUnpaid.complete, true, 'equal committed and paid has zero unpaid contribution');
+
+  item.committed_amount = '50000';
+  item.payments[0].amount = '50000';
+  summary = calculateBudget(itinerary);
+  assert.equal(summary.totals.completeness.expectedStillToSpend.complete, true, 'fully paid expectation has zero remaining contribution');
+  assert.equal(summary.totals.completeness.committedUnpaid.complete, true);
+
+  item.fx.rate_to_base = '0.0003';
+  summary = calculateBudget(itinerary);
+  for (const metric of Object.values(summary.totals.completeness)) assert.equal(metric.complete, true);
+  assert.equal(summary.totals.expected, '15');
+  assert.notEqual(summary.totals.headroom, null);
 });

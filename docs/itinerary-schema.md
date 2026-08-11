@@ -271,6 +271,8 @@ The Budget page always reports whole-item totals. Today derives only the part th
 
 If an applicable item or same-day transaction has no stored FX snapshot, Today marks the relevant base-currency amount incomplete and identifies the affected item count. It never invents an exchange rate.
 
+Budget completeness is calculated per metric, not as one blanket flag. An unconverted item affects a metric only when its native-currency contribution to that metric is non-zero. For example, an unbooked foreign-currency estimate makes Expected and Expected, not committed incomplete, but does not make Paid or Committed incomplete when both are exactly zero. Budget headroom is available only when Expected is complete.
+
 Expected, committed, and paid are calculated rather than independently stored totals:
 
 - **Expected** = `unit_amount × derived/manual quantity`.

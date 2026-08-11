@@ -1,7 +1,7 @@
 import { loadMapConfig } from './map-config.js?v=map-marker-anchor-1';
 import { buildTripMapModel, routeForDay } from './map-data.js?v=map-marker-anchor-1';
 import { TripMap } from './map-view.js?v=map-marker-anchor-1';
-import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuantity } from './budget.js?v=budget-v6';
+import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuantity } from './budget.js?v=budget-v7';
 import { deriveBookingAction, groupBookings } from './booking.js?v=booking-v2';
 import { semanticDiff } from './import-diff.js?v=import-v1';
 import { deriveToday } from './today.js?v=today-v3';
@@ -982,10 +982,11 @@ function budgetBarWidth(value, maximum) {
 }
 
 function budgetRow(row, currency, kind) {
-  const missingCount = row.missingFxItems?.length || 0;
+  const missingCount = row.completeness?.expected?.missingFx.length || 0;
+  const incompleteRow = !row.completeness?.expected?.complete;
   const incomplete = missingCount ? ` · Incomplete — ${missingCount} item${missingCount === 1 ? '' : 's'} need FX` : '';
-  const amount = row.incomplete ? `${formatMoney(row.expected, currency)} partial` : formatMoney(row.expected, currency);
-  return `<button class="budget-breakdown-row ${row.incomplete ? 'incomplete' : ''}" data-budget-filter-kind="${kind}" data-budget-filter-id="${escapeHtml(row.id)}"><span><strong>${escapeHtml(row.label)}</strong><small>${row.items.length} item${row.items.length === 1 ? '' : 's'}${incomplete}</small></span><span class="amount" aria-label="${escapeHtml(row.incomplete ? `${formatMoney(row.expected, currency)} convertible subtotal; incomplete` : amount)}">${escapeHtml(amount)}</span></button>`;
+  const amount = incompleteRow ? `${formatMoney(row.expected, currency)} partial` : formatMoney(row.expected, currency);
+  return `<button class="budget-breakdown-row ${incompleteRow ? 'incomplete' : ''}" data-budget-filter-kind="${kind}" data-budget-filter-id="${escapeHtml(row.id)}"><span><strong>${escapeHtml(row.label)}</strong><small>${row.items.length} item${row.items.length === 1 ? '' : 's'}${incomplete}</small></span><span class="amount" aria-label="${escapeHtml(incompleteRow ? `${formatMoney(row.expected, currency)} convertible subtotal; incomplete` : amount)}">${escapeHtml(amount)}</span></button>`;
 }
 
 function renderBudget() {
@@ -993,26 +994,30 @@ function renderBudget() {
   const summary = calculateBudget(data); const { totals, baseCurrency } = summary;
   el('budget-toolbar-note').textContent = `Reporting in ${baseCurrency}`;
   const missingCount = totals.missingFx.length;
-  const completeNote = totals.complete ? 'All items have a stored rate.' : `${missingCount} item${missingCount === 1 ? '' : 's'} need FX.`;
-  const expectedLabel = totals.complete ? 'Expected total' : 'Expected total incomplete';
-  const expectedNote = totals.complete ? 'Current estimate' : `Convertible subtotal + ${missingCount} unconverted item${missingCount === 1 ? '' : 's'}`;
+  const completeNote = missingCount ? `${missingCount} item${missingCount === 1 ? '' : 's'} need FX for at least one metric.` : 'All contributing amounts have a stored rate.';
+  const metricCard = (metric, label, note, className = '') => {
+    const completeness = totals.completeness[metric]; const count = completeness.missingFx.length;
+    const incomplete = !completeness.complete;
+    return [incomplete ? `${label} incomplete` : label, formatMoney(totals[metric], baseCurrency), incomplete ? `Convertible subtotal + ${count} unconverted item${count === 1 ? '' : 's'}` : note, `${className} ${incomplete ? 'incomplete' : ''}`.trim()];
+  };
   const headroom = totals.headroom === null ? 'Unavailable' : formatMoney(totals.headroom, baseCurrency);
-  const headroomNote = totals.headroom === null ? `Add FX rates for ${missingCount} item${missingCount === 1 ? '' : 's'} to calculate headroom.` : decimalCompare(totals.headroom, '0') < 0 ? 'Over budget' : 'Budget less expected';
+  const expectedMissingCount = totals.completeness.expected.missingFx.length;
+  const headroomNote = totals.headroom === null ? `Add FX rates for ${expectedMissingCount} expected item${expectedMissingCount === 1 ? '' : 's'} to calculate headroom.` : decimalCompare(totals.headroom, '0') < 0 ? 'Over budget' : 'Budget less expected';
   const cards = [
     ['Trip budget', formatMoney(summary.totalBudget, baseCurrency), completeNote, 'emphasis'],
-    [expectedLabel, formatMoney(totals.expected, baseCurrency), expectedNote, totals.complete ? '' : 'incomplete'],
-    [totals.complete ? 'Committed' : 'Committed subtotal', formatMoney(totals.committed, baseCurrency), totals.complete ? 'Reservations and obligations' : `Convertible subtotal; ${missingCount} item${missingCount === 1 ? '' : 's'} need FX`, ''],
-    [totals.complete ? 'Paid / spent' : 'Paid / spent subtotal', formatMoney(totals.paid, baseCurrency), totals.complete ? 'Payments less refunds' : `Convertible subtotal; ${missingCount} item${missingCount === 1 ? '' : 's'} need FX`, ''],
-    ['Expected still to spend', formatMoney(totals.expectedStillToSpend, baseCurrency), 'Expected less paid', ''],
-    ['Expected, not committed', formatMoney(totals.expectedUncommitted, baseCurrency), 'Flexible estimate', ''],
-    ['Committed, not paid', formatMoney(totals.committedUnpaid, baseCurrency), 'Balances still due', ''],
+    metricCard('expected', 'Expected total', 'Current estimate'),
+    metricCard('committed', 'Committed', 'Reservations and obligations'),
+    metricCard('paid', 'Paid / spent', 'Payments less refunds'),
+    metricCard('expectedStillToSpend', 'Expected still to spend', 'Expected less paid'),
+    metricCard('expectedUncommitted', 'Expected, not committed', 'Flexible estimate'),
+    metricCard('committedUnpaid', 'Committed, not paid', 'Balances still due'),
     ['Budget headroom', headroom, headroomNote, totals.headroom === null ? 'emphasis incomplete' : 'emphasis'],
   ].map(([label, value, note, className]) => `<article class="budget-card ${className}"><small>${label}</small><strong>${value}</strong><p>${note}</p></article>`).join('');
   const max = summary.totalBudget;
   const expectedWidth = budgetBarWidth(totals.expected, max); const committedWidth = budgetBarWidth(totals.committed, max); const paidWidth = budgetBarWidth(totals.paid, max);
   const missingFxWarnings = summary.warnings.filter(warning => warning.kind === 'missing_fx');
   const valueWarnings = summary.warnings.filter(warning => warning.kind !== 'missing_fx');
-  const warnings = `${missingFxWarnings.length ? `<div class="budget-warning budget-warning-fx" role="status"><strong>FX rates needed to complete this Budget</strong><p>${escapeHtml(`${missingFxWarnings.length} item${missingFxWarnings.length === 1 ? '' : 's'} cannot yet be included in complete base-currency totals or headroom.`)}</p><div class="budget-warning-actions">${missingFxWarnings.map(warning => `<button class="linkish-button" data-add-fx="${escapeHtml(warning.item.id)}">${escapeHtml(warning.item.name)} — add FX</button>`).join('')}</div></div>` : ''}${valueWarnings.length ? `<div class="budget-warning"><strong>Check budget data:</strong> ${valueWarnings.slice(0, 3).map(warning => warning.kind === 'over_budget' ? 'Expected cost exceeds the trip budget.' : `${escapeHtml(warning.item.name)} needs a value review.`).join(' ')}</div>` : ''}`;
+  const warnings = `${missingFxWarnings.length ? `<div class="budget-warning budget-warning-fx" role="status"><strong>FX rates needed to complete this Budget</strong><p>${escapeHtml(`${missingFxWarnings.length} item${missingFxWarnings.length === 1 ? '' : 's'} cannot yet be included in every affected base-currency metric.`)}</p><div class="budget-warning-actions">${missingFxWarnings.map(warning => `<button class="linkish-button" data-add-fx="${escapeHtml(warning.item.id)}">${escapeHtml(warning.item.name)} — add FX</button>`).join('')}</div></div>` : ''}${valueWarnings.length ? `<div class="budget-warning"><strong>Check budget data:</strong> ${valueWarnings.slice(0, 3).map(warning => warning.kind === 'over_budget' ? 'Expected cost exceeds the trip budget.' : `${escapeHtml(warning.item.name)} needs a value review.`).join(' ')}</div>` : ''}`;
   const filterText = state.budgetSearch.trim().toLowerCase();
   const displayed = summary.items.filter(item => (!state.budgetCategoryFilter || item.category_id === state.budgetCategoryFilter || item.visit_id === state.budgetCategoryFilter) && (!filterText || `${item.name} ${item.notes} ${budgetReference(item, data)}`.toLowerCase().includes(filterText)));
   const categoryOptions = data.budget.categories.map(category => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`).join('');
@@ -1025,9 +1030,10 @@ function renderBudget() {
     const basis = item.expected.basis === 'fixed' ? 'Fixed' : `${formatMoney(item.expected.unit_amount, item.currency)} ${item.expected.basis.replace('_', ' ')} × ${quantity} = ${formatMoney(item.expectedAmount, item.currency)}`;
     return `<article class="budget-item ${item.base ? '' : 'incomplete'}"><div class="budget-item-main"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(budgetReference(item, data))} · ${escapeHtml(native)} · ${escapeHtml(basis)}</small><span class="budget-item-tag">${escapeHtml(category?.name || item.category_id)}</span></div><div class="budget-amount-stack"><span>${item.base ? 'Base expected' : 'Base expected incomplete'}</span><strong>${escapeHtml(baseAmount)}</strong></div><div class="budget-amount-stack"><span>Committed / paid</span><strong>${formatMoney(item.committed_amount, item.currency)} / ${escapeHtml(paid)}</strong></div><div class="budget-item-actions">${item.base ? '' : `<button class="secondary-button small" data-add-fx="${escapeHtml(item.id)}">Add FX</button>`}<button class="secondary-button small" data-edit-cost="${escapeHtml(item.id)}">Edit</button></div></article>`;
   }).join('') : '<div class="budget-empty">No cost items match this filter. Add an estimate or record a quick expense.</div>';
-  const coverageLabel = totals.complete ? 'Expected, committed and paid against the trip budget' : 'Convertible base-currency subtotal — unconverted items are excluded';
-  const keyPrefix = totals.complete ? '' : 'Convertible ';
-  el('budget-content').innerHTML = `<section class="budget-summary-grid">${cards}</section><section class="budget-coverage ${totals.complete ? '' : 'incomplete'}"><div class="budget-coverage-head"><strong>${coverageLabel}</strong><span>${completeNote}</span></div><div class="budget-track" aria-label="Budget coverage"><span class="expected" style="width:${expectedWidth}%"></span><span class="committed" style="width:${committedWidth}%"></span><span class="paid" style="width:${paidWidth}%"></span></div><div class="budget-key"><span class="expected"><i></i>${keyPrefix}expected ${formatMoney(totals.expected, baseCurrency)}</span><span class="committed"><i></i>${keyPrefix}committed ${formatMoney(totals.committed, baseCurrency)}</span><span class="paid"><i></i>${keyPrefix}paid ${formatMoney(totals.paid, baseCurrency)}</span></div></section>${warnings}<section class="budget-grid"><article class="budget-section"><h2>Where the expected cost goes</h2><p>Tap a category to filter the underlying items.</p><div class="budget-breakdown">${summary.categories.map(row => budgetRow(row, baseCurrency, 'category')).join('') || '<div class="budget-empty">No cost items yet.</div>'}</div></article><article class="budget-section"><h2>By visit and whole-trip costs</h2><p>Repeated visits stay separate.</p><div class="budget-breakdown">${summary.visits.map(row => budgetRow(row, baseCurrency, 'visit')).join('') || '<div class="budget-empty">No visit-linked costs yet.</div>'}</div></article></section><section class="budget-section budget-items-section"><div class="budget-items-toolbar"><div><h2>Cost items</h2><p>Expected, commitment and payment history in one place.</p></div><input id="budget-search" type="search" value="${escapeHtml(state.budgetSearch)}" placeholder="Search costs or places"><select id="budget-category-filter"><option value="">All categories and visits</option>${categoryOptions}</select></div><div id="budget-items" class="budget-items">${items}</div></section>`;
+  const coverageIncomplete = ['expected', 'committed', 'paid'].some(metric => !totals.completeness[metric].complete);
+  const coverageLabel = coverageIncomplete ? 'Coverage includes convertible subtotals where noted' : 'Expected, committed and paid against the trip budget';
+  const keyLabel = metric => `${totals.completeness[metric].complete ? '' : 'Convertible '}${metric}`;
+  el('budget-content').innerHTML = `<section class="budget-summary-grid">${cards}</section><section class="budget-coverage ${coverageIncomplete ? 'incomplete' : ''}"><div class="budget-coverage-head"><strong>${coverageLabel}</strong><span>${completeNote}</span></div><div class="budget-track" aria-label="Budget coverage"><span class="expected" style="width:${expectedWidth}%"></span><span class="committed" style="width:${committedWidth}%"></span><span class="paid" style="width:${paidWidth}%"></span></div><div class="budget-key"><span class="expected"><i></i>${keyLabel('expected')} ${formatMoney(totals.expected, baseCurrency)}</span><span class="committed"><i></i>${keyLabel('committed')} ${formatMoney(totals.committed, baseCurrency)}</span><span class="paid"><i></i>${keyLabel('paid')} ${formatMoney(totals.paid, baseCurrency)}</span></div></section>${warnings}<section class="budget-grid"><article class="budget-section"><h2>Where the expected cost goes</h2><p>Tap a category to filter the underlying items.</p><div class="budget-breakdown">${summary.categories.map(row => budgetRow(row, baseCurrency, 'category')).join('') || '<div class="budget-empty">No cost items yet.</div>'}</div></article><article class="budget-section"><h2>By visit and whole-trip costs</h2><p>Repeated visits stay separate.</p><div class="budget-breakdown">${summary.visits.map(row => budgetRow(row, baseCurrency, 'visit')).join('') || '<div class="budget-empty">No visit-linked costs yet.</div>'}</div></article></section><section class="budget-section budget-items-section"><div class="budget-items-toolbar"><div><h2>Cost items</h2><p>Expected, commitment and payment history in one place.</p></div><input id="budget-search" type="search" value="${escapeHtml(state.budgetSearch)}" placeholder="Search costs or places"><select id="budget-category-filter"><option value="">All categories and visits</option>${categoryOptions}</select></div><div id="budget-items" class="budget-items">${items}</div></section>`;
   el('budget-category-filter').value = data.budget.categories.some(category => category.id === state.budgetCategoryFilter) ? state.budgetCategoryFilter : '';
   el('budget-search').addEventListener('input', event => { state.budgetSearch = event.target.value; renderBudget(); });
   el('budget-category-filter').addEventListener('change', event => { state.budgetCategoryFilter = event.target.value; renderBudget(); });

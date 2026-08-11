@@ -168,26 +168,48 @@ export function calculateTodayMoney(itinerary, date) {
   return result;
 }
 
-function emptyTotals() {
-  return { expected: '0', committed: '0', paid: '0', expectedStillToSpend: '0', expectedUncommitted: '0', committedUnpaid: '0', complete: true, missingFx: [] };
+const BUDGET_METRICS = ['expected', 'committed', 'paid', 'expectedStillToSpend', 'expectedUncommitted', 'committedUnpaid'];
+
+function metricCompleteness() {
+  return Object.fromEntries(BUDGET_METRICS.map(metric => [metric, { complete: true, missingFx: [] }]));
 }
 
-function addBase(total, item, itinerary, baseCurrency) {
+function emptyTotals() {
+  return {
+    expected: '0', committed: '0', paid: '0', expectedStillToSpend: '0', expectedUncommitted: '0', committedUnpaid: '0',
+    completeness: metricCompleteness(), complete: true, missingFx: [],
+  };
+}
+
+function itemMetricAmounts(item, itinerary) {
+  const expected = itemExpected(item, itinerary);
+  const committed = item.committed_amount;
+  const paid = itemPaid(item);
+  return {
+    expected,
+    committed,
+    paid,
+    expectedStillToSpend: decimalMax(decimalAdd(expected, decimalNegate(paid))),
+    expectedUncommitted: decimalMax(decimalAdd(expected, decimalNegate(committed))),
+    committedUnpaid: decimalMax(decimalAdd(committed, decimalNegate(paid))),
+  };
+}
+
+function addBase(total, item, amounts, baseCurrency) {
   const rate = itemBaseRate(item, baseCurrency);
-  if (!rate) {
-    total.complete = false;
-    total.missingFx.push(item);
-    return;
+  for (const metric of BUDGET_METRICS) {
+    const amount = amounts[metric];
+    if (decimalCompare(amount, '0') === 0) continue;
+    if (!rate) {
+      const missing = total.completeness[metric].missingFx;
+      if (!missing.some(candidate => candidate.id === item.id)) missing.push(item);
+      continue;
+    }
+    total[metric] = decimalAdd(total[metric], decimalMultiply(amount, rate));
   }
-  const expected = decimalMultiply(itemExpected(item, itinerary), rate);
-  const committed = decimalMultiply(item.committed_amount, rate);
-  const paid = decimalMultiply(itemPaid(item), rate);
-  total.expected = decimalAdd(total.expected, expected);
-  total.committed = decimalAdd(total.committed, committed);
-  total.paid = decimalAdd(total.paid, paid);
-  total.expectedStillToSpend = decimalAdd(total.expectedStillToSpend, decimalMax(decimalAdd(expected, decimalNegate(paid))));
-  total.expectedUncommitted = decimalAdd(total.expectedUncommitted, decimalMax(decimalAdd(expected, decimalNegate(committed))));
-  total.committedUnpaid = decimalAdd(total.committedUnpaid, decimalMax(decimalAdd(committed, decimalNegate(paid))));
+  for (const metric of BUDGET_METRICS) total.completeness[metric].complete = total.completeness[metric].missingFx.length === 0;
+  total.missingFx = [...new Map(BUDGET_METRICS.flatMap(metric => total.completeness[metric].missingFx).map(item => [item.id, item])).values()];
+  total.complete = total.completeness.expected.complete;
 }
 
 export function calculateBudget(itinerary) {
@@ -195,14 +217,13 @@ export function calculateBudget(itinerary) {
   const baseCurrency = budget.base_currency;
   const totals = emptyTotals();
   const enrichedItems = (budget.cost_items || []).map(item => {
-    const expected = itemExpected(item, itinerary);
-    const paid = itemPaid(item);
+    const amounts = itemMetricAmounts(item, itinerary);
     const rate = itemBaseRate(item, baseCurrency);
     const base = rate ? {
-      expected: decimalMultiply(expected, rate), committed: decimalMultiply(item.committed_amount, rate), paid: decimalMultiply(paid, rate),
+      expected: decimalMultiply(amounts.expected, rate), committed: decimalMultiply(amounts.committed, rate), paid: decimalMultiply(amounts.paid, rate),
     } : null;
-    addBase(totals, item, itinerary, baseCurrency);
-    return { ...item, expectedAmount: expected, paidAmount: paid, remainingAmount: decimalMax(decimalAdd(expected, decimalNegate(paid))), rateToBase: rate, base };
+    addBase(totals, item, amounts, baseCurrency);
+    return { ...item, expectedAmount: amounts.expected, paidAmount: amounts.paid, remainingAmount: amounts.expectedStillToSpend, rateToBase: rate, base };
   });
   const categoryById = new Map((budget.categories || []).map(category => [category.id, category]));
   const visitById = new Map((itinerary.visits || []).map(visit => [visit.id, visit]));
@@ -212,20 +233,22 @@ export function calculateBudget(itinerary) {
     const visitLocation = itemVisit ? itinerary.locations?.[itemVisit.location_id] : null;
     const visitLabel = itemVisit ? `${visitLocation?.name || itemVisit.location_id} · Visit ${itemVisit.order}` : 'Whole trip';
     for (const [key, map, label] of [[item.category_id, byCategory, categoryById.get(item.category_id)?.name || item.category_id], [item.visit_id || 'trip', byVisit, visitLabel]]) {
-      const row = map.get(key) || { id: key, label, expected: '0', committed: '0', paid: '0', incomplete: false, missingFxItems: [], items: [] };
+      const row = map.get(key) || {
+        id: key, label, expected: '0', committed: '0', paid: '0', expectedStillToSpend: '0', expectedUncommitted: '0', committedUnpaid: '0',
+        completeness: metricCompleteness(), complete: true, missingFx: [], items: [],
+      };
       row.items.push(item);
-      if (!item.base) { row.incomplete = true; row.missingFxItems.push(item); }
-      else { row.expected = decimalAdd(row.expected, item.base.expected); row.committed = decimalAdd(row.committed, item.base.committed); row.paid = decimalAdd(row.paid, item.base.paid); }
+      addBase(row, item, itemMetricAmounts(item, itinerary), baseCurrency);
       map.set(key, row);
     }
   }
   const warnings = [];
   for (const item of enrichedItems) {
-    if (!item.rateToBase) warnings.push({ kind: 'missing_fx', item });
+    if (totals.missingFx.some(candidate => candidate.id === item.id)) warnings.push({ kind: 'missing_fx', item });
     if (decimalCompare(item.committed_amount, item.expectedAmount) > 0) warnings.push({ kind: 'committed_over_expected', item });
     if (decimalCompare(item.paidAmount, item.expectedAmount) > 0) warnings.push({ kind: 'paid_over_expected', item });
   }
-  const headroom = totals.complete ? decimalAdd(budget.total_budget, decimalNegate(totals.expected)) : null;
+  const headroom = totals.completeness.expected.complete ? decimalAdd(budget.total_budget, decimalNegate(totals.expected)) : null;
   if (headroom && decimalCompare(headroom, '0') < 0) warnings.push({ kind: 'over_budget' });
   return { baseCurrency, totalBudget: budget.total_budget, totals: { ...totals, headroom }, items: enrichedItems, categories: [...byCategory.values()].sort((a, b) => decimalCompare(b.expected, a.expected)), visits: [...byVisit.values()].sort((a, b) => decimalCompare(b.expected, a.expected)), warnings };
 }
