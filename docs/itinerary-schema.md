@@ -219,7 +219,7 @@ Booking lifecycle never invents money. `cost_item_id` and the reciprocal `budget
 }
 ```
 
-- `base_currency` is an ISO-style three-letter uppercase reporting currency. Dashboard totals are calculated in it.
+- `base_currency` is the itinerary's one authoritative home/reporting currency, as an ISO-style three-letter uppercase code. Aggregate totals are calculated in it; `metadata.default_currency` remains only an editor hint and is not a second Budget setting.
 - `total_budget` is an exact non-negative decimal string in `base_currency` (for example `"2500.00"`). Decimal strings, rather than JSON numbers, are authoritative for all money and rates. They avoid binary floating-point rounding and preserve the entered amount; do not use commas, currency symbols, exponent notation, or `null`.
 - `categories` are independent from event categories. Each has a stable `id`, non-blank `name`, and safe six-digit hex `colour`. The migration supplies Accommodation, Long-distance Transport, Local Transport, Food & Drink, Activities & Tours, Treks / Expeditions, Visas & Admin, Insurance, Gear / Equipment, Communications, and Miscellaneous. Custom categories are allowed.
 
@@ -256,7 +256,8 @@ Each `cost_items` object has a stable `id`, non-blank `name`, `category_id`, nat
 - `expected.unit_amount` is a non-negative exact decimal string. `basis` is `fixed`, `per_day`, `per_night`, `per_person`, or `per_unit`. A fixed item always uses manual quantity `1`.
 - `quantity_source` is `manual`, `visit_days`, or `visit_nights`. Derived sources require `visit_id` and use `quantity: 0`; the app derives inclusive visit days or inclusive days minus one nights. Manual quantities are positive integers for non-fixed bases.
 - `committed_amount` is a non-negative native-currency decimal: the known obligation, not a second estimate. It may differ from expected when a price changes.
-- `fx.rate_to_base` is the stored number of base-currency units per one native-currency unit. For a foreign currency it is required before that item can contribute to complete base totals. `as_of_date`, `source`, and `note` explain the snapshot. Base-currency items use rate `"1"` or a blank rate. No live FX lookup is performed.
+- `fx.rate_to_base` is the stored number of home-currency units per one native-currency unit. For a foreign currency it is required before that item can contribute to complete converted totals. `as_of_date`, `source`, and `note` explain the snapshot. Home-currency items use an effective rate of `"1"`. No live FX lookup is performed. The UI shows native money first and the stored-rate home equivalent second.
+- An FX snapshot targets the `base_currency` that was active when it was recorded. Changing home currency never reinterprets those rates: Trip Planner asks for confirmation, preserves native amounts and payment history, records the previous snapshot in the free-text FX note where available, clears obsolete rates, and requires new planning rates. Items native to the new home currency use rate `"1"`.
 - Optional `visit_id`, `event_id`, `booking_id`, and `location_id` must refer to existing objects and agree with each other when they overlap. `start_date` and `end_date` are optional in-trip dates. Use blank strings for absent optional references/dates, never `null`.
 
 ### Daily Budget reporting

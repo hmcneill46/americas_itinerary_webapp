@@ -1,11 +1,11 @@
-const CACHE_NAME = 'trip-planner-shell-v10';
+const CACHE_NAME = 'trip-planner-shell-v11';
 const APP_SHELL = [
-  '/', '/static/index.html', '/static/styles.css?v=budget-clarity-v2',
-  '/static/app.js?v=budget-metrics-v1', '/static/offline-store.js?v=offline-v5',
-  '/static/budget.js?v=budget-v7', '/static/booking.js?v=booking-v2',
+  '/', '/static/index.html', '/static/styles.css?v=presence-currency-v3',
+  '/static/app.js?v=presence-currency-v3', '/static/offline-store.js?v=offline-v5',
+  '/static/budget.js?v=budget-v8', '/static/booking.js?v=booking-v2',
   '/static/import-diff.js?v=import-v1', '/static/today.js?v=today-v3',
-  '/static/timeline.js?v=schedule-modes-v5',
-  '/static/map-config.js?v=map-marker-anchor-1', '/static/map-data.js?v=map-marker-anchor-1',
+  '/static/timeline.js?v=presence-v1',
+  '/static/map-config.js?v=map-marker-anchor-1', '/static/map-data.js?v=map-visit-plans-1',
   '/static/map-view.js?v=map-marker-anchor-1', '/static/vendor/maplibre-gl/maplibre-gl.css',
   '/static/vendor/maplibre-gl/maplibre-gl.mjs?v=6.3.0', '/static/vendor/maplibre-gl/maplibre-gl-shared.mjs',
   '/static/vendor/maplibre-gl/maplibre-gl-worker.mjs', '/static/manifest.webmanifest',

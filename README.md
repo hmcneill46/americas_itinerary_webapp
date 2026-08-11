@@ -52,15 +52,15 @@ Download/upload supports an AI-assisted workflow: download JSON, edit it with a 
 
 ## Views and editing
 
-- **Schedule** has two day-by-day modes on the same 24-hour timeline. **Events** renders exact-minute event segments, overlaps, multi-day clipping, search and independent category filters. **Places & travel** derives visit stays, explicit timed journeys and honest untimed arrival cues without compressing the whole trip or adding display-only fields to the schema. Desktop selections use a closeable detail panel; phone selections open a full-screen detail view.
+- **Schedule** has two day-by-day modes on the same 24-hour timeline. **Events** renders exact-minute event segments, overlaps, multi-day clipping, search and independent category filters. **Places & travel** derives one non-overlapping physical sequence per day: location, travel, then destination. Overnight journeys clip across rows, while untimed transitions and contradictory legs remain visibly uncertain instead of gaining invented clock times. Desktop selections use a closeable detail panel; phone selections open a full-screen detail view.
 - **Map** uses a locally served, pinned MapLibre GL JS runtime with an OpenFreeMap Positron vector basemap. It shows ordered visit markers, repeated visits, secondary event locations and tappable dashed route connections. Map selections can open the relevant day or event, while explicit focus actions leave ordinary manual exploration alone.
-- **Budget** keeps exact-decimal native-currency cost items, stored FX snapshots, expected/committed/paid totals, deposits/refunds, category and visit breakdowns, plus a responsive cost editor and quick-expense flow. No live currency service is used; an item without an FX snapshot is visibly excluded from complete base-currency totals.
+- **Budget** keeps exact-decimal native-currency cost items, stored FX snapshots, expected/committed/paid totals, deposits/refunds, category and visit breakdowns, plus a responsive cost editor and quick-expense flow. `budget.base_currency` is the sole home/reporting currency. Linked costs show their native price first and a stored-rate home equivalent second. No live currency service is used; an item without an FX snapshot is visibly excluded from affected home-currency totals.
 - **Bookings** is an action-first view: lifecycle, explainable timing strategy, moving lead-time recommendations, hard deadlines, risk/flexibility rationale and optional Budget links. It does not scrape providers or claim live availability.
 - **Edit** supports events, locations, visit duration/order, day information and route date reflow.
 
 Route reflow shifts a complete visit, its days and its events while retaining floating-local times.
 
-All current route geometry is explicitly schematic: it connects known endpoints and does not claim to follow a road, railway, flight path or walking trail. No itinerary schema change was needed for the map overhaul. See [docs/map.md](docs/map.md) for provider configuration, attribution, failure behavior and the future PMTiles seam.
+All current map route lines are approximate endpoint connections: they do not claim to follow a road, railway, flight path, ferry route or walking trail. No itinerary schema change was needed for the map overhaul. See [docs/map.md](docs/map.md) for provider configuration, attribution, failure behavior and the future PMTiles seam.
 
 ## Offline read resilience
 

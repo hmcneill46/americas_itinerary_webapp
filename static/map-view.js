@@ -86,7 +86,7 @@ export function buildVisitPopup(visit) {
 export function buildRoutePopup(route) {
   const content = document.createElement('div');
   content.className = 'trip-map-popup';
-  content.append(textNode('p', 'Schematic connection', 'trip-map-popup-kicker'));
+  content.append(textNode('p', 'Approximate map connection', 'trip-map-popup-kicker'));
   content.append(textNode('h3', route.title));
   content.append(detailLine('Route', `${route.fromName} → ${route.toName}`));
   content.append(detailLine('Mode', route.mode));
@@ -96,7 +96,7 @@ export function buildRoutePopup(route) {
     const minutes = route.durationMinutes % 60;
     content.append(detailLine('Duration', `${hours ? `${hours}h ` : ''}${minutes ? `${minutes}m` : ''}`.trim()));
   }
-  content.append(textNode('p', 'Dashed geometry is an approximate link, not a road or rail alignment.', 'trip-map-popup-note'));
+  content.append(textNode('p', 'This line connects known endpoints; it does not trace the actual road, railway, flight path, ferry route, or walking trail.', 'trip-map-popup-note'));
   return content;
 }
 

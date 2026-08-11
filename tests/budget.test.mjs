@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { calculateBudget, calculateTodayMoney, decimalAdd, decimalMultiply, expectedForCalendarDate, formatMoney, itemExpected, itemPaid, paymentNetForCalendarDate } from '../static/budget.js';
+import { calculateBudget, calculateTodayMoney, changeBudgetBaseCurrency, decimalAdd, decimalMultiply, expectedForCalendarDate, formatMoney, itemExpected, itemPaid, paymentNetForCalendarDate, presentNativeAndHome } from '../static/budget.js';
 
 const example = JSON.parse(await readFile(new URL('../data/itinerary.example.json', import.meta.url), 'utf8'));
 const clone = value => structuredClone(value);
@@ -21,6 +21,41 @@ test('exact decimal operations do not use binary floating point', () => {
   assert.equal(decimalAdd('0.1', '0.2'), '0.3');
   assert.equal(decimalMultiply('25.00', '5'), '125');
   assert.equal(formatMoney('1234.5', 'GBP'), 'GBP 1,234.50');
+});
+
+test('native and home money presentation is exact, concise, and honest about missing FX', () => {
+  const foreign = { currency: 'PEN', fx: { rate_to_base: '0.21' } };
+  assert.deepEqual(presentNativeAndHome('180', foreign, 'GBP'), {
+    native: 'PEN 180.00', home: 'GBP 37.80', homeAmount: '37.8', complete: true,
+    text: 'PEN 180.00 · ≈ GBP 37.80', needsFx: false,
+  });
+  assert.equal(presentNativeAndHome('42', { currency: 'GBP', fx: {} }, 'GBP').text, 'GBP 42.00');
+  assert.equal(presentNativeAndHome('50000', { currency: 'ARS', fx: {} }, 'GBP').text, 'ARS 50,000.00 · GBP unavailable — FX needed');
+  const zero = presentNativeAndHome('0', { currency: 'ARS', fx: {} }, 'GBP');
+  assert.equal(zero.complete, true);
+  assert.equal(zero.text, 'ARS 0.00 · ≈ GBP 0.00');
+  assert.equal(decimalMultiply('180', '0.21'), '37.8');
+});
+
+test('changing home currency clears old target-specific rates without changing native money', () => {
+  const itinerary = dailyItinerary();
+  itinerary.budget.cost_items = [
+    { id: 'gbp', name: 'Rail', category_id: 'activity', currency: 'GBP', expected: { unit_amount: '100', basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '90', payments: [{ id: 'p1', kind: 'payment', amount: '20', date: '2027-04-01' }], fx: { rate_to_base: '1', as_of_date: '', source: '', note: '' } },
+    { id: 'eur', name: 'Stay', category_id: 'activity', currency: 'EUR', expected: { unit_amount: '200', basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '200', payments: [], fx: { rate_to_base: '0.86', as_of_date: '2027-03-01', source: 'manual', note: 'Planning snapshot.' } },
+    { id: 'usd', name: 'Tour', category_id: 'activity', currency: 'USD', expected: { unit_amount: '50', basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '0', payments: [], fx: { rate_to_base: '0.78', as_of_date: '2027-03-02', source: 'manual', note: '' } },
+  ];
+  const changed = changeBudgetBaseCurrency(itinerary.budget, 'USD');
+  const [gbp, eur, usd] = changed.budget.cost_items;
+  assert.equal(changed.budget.base_currency, 'USD');
+  assert.deepEqual([gbp.expected.unit_amount, gbp.committed_amount, gbp.payments[0].amount], ['100', '90', '20']);
+  assert.equal(gbp.fx.rate_to_base, '', 'old home-currency amount now needs a GBP to USD rate');
+  assert.equal(eur.fx.rate_to_base, '');
+  assert.match(eur.fx.note, /Previous planning rate to GBP: 0\.86, as of 2027-03-01, source: manual\./);
+  assert.equal(usd.fx.rate_to_base, '1', 'items native to the new home currency have an exact unit rate');
+  assert.match(usd.fx.note, /Previous planning rate to GBP: 0\.78/);
+  assert.equal(presentNativeAndHome('50', usd, 'USD').text, 'USD 50.00');
+  assert.equal(presentNativeAndHome('200', eur, 'USD').needsFx, true);
+  assert.deepEqual(itinerary.budget.cost_items.map(item => item.fx.rate_to_base), ['1', '0.86', '0.78'], 'source Budget is not mutated');
 });
 
 test('fixed, visit-day and visit-night expectations derive once', () => {

@@ -69,6 +69,26 @@ function nightCount(visit) {
   return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.round((end - start) / DAY_MS)) : null;
 }
 
+export function buildVisitPlanSummary(itinerary, visitId, limit = 6) {
+  const events = (itinerary?.events || []).filter(event => event.visit_id === visitId).sort((a, b) => {
+    const left = floatingValue(a.actual_start || a.start);
+    const right = floatingValue(b.actual_start || b.start);
+    return left - right || String(a.title).localeCompare(String(b.title));
+  });
+  const filler = /^(sleep|meal|admin)$/i;
+  const notable = events.filter(event => event.transport_mode || !filler.test(event.category));
+  const selected = (notable.length ? notable : events).slice(0, Math.max(0, limit));
+  return {
+    events: selected.map(event => ({
+      id: event.id, title: event.title, category: event.category, transportMode: event.transport_mode || '',
+      start: event.start, actualStart: event.actual_start || '', outcome: event.outcome || 'planned',
+    })),
+    totalCount: events.length,
+    notableCount: notable.length,
+    hiddenCount: Math.max(0, (notable.length ? notable.length : events.length) - selected.length),
+  };
+}
+
 function schematicLine(from, to) {
   const origin = locationPoint(from);
   const destination = locationPoint(to);

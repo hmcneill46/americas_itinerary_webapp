@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { DEFAULT_CONFIG, loadMapConfig, normaliseMapConfig } from '../static/map-config.js';
-import { buildLocationMarkerGroups, buildTripMapModel, coordinatesForBounds, routeForDay, validCoordinates } from '../static/map-data.js';
+import { buildLocationMarkerGroups, buildTripMapModel, buildVisitPlanSummary, coordinatesForBounds, routeForDay, validCoordinates } from '../static/map-data.js';
 
 const example = JSON.parse(await readFile(new URL('../data/itinerary.example.json', import.meta.url), 'utf8'));
 const clone = value => structuredClone(value);
@@ -47,6 +47,24 @@ test('return visits share one exact geographic marker group', () => {
     country: 'United Kingdom',
     visits: londonVisits,
   });
+});
+
+test('visit plan summaries are chronological, outcome-aware, and bounded for map details', () => {
+  const itinerary = clone(example);
+  const visitId = 'paris_01';
+  itinerary.events = [
+    { id: 'morning_plan', title: 'Morning market', category: 'Activity', visit_id: visitId, start: '2027-04-10T09:00', end: '2027-04-10T10:00', actual_start: '', outcome: 'completed' },
+    { id: 'sleep_filler', title: 'Sleep', category: 'Sleep', visit_id: visitId, start: '2027-04-10T00:00', end: '2027-04-10T07:00', actual_start: '', outcome: 'planned' },
+    { id: 'late_plan', title: 'Evening concert', category: 'Activity', visit_id: visitId, start: '2027-04-10T20:00', end: '2027-04-10T22:00', actual_start: '2027-04-10T20:30', outcome: 'delayed' },
+    { id: 'later_plan', title: 'Late dinner', category: 'Food', visit_id: visitId, start: '2027-04-10T22:30', end: '2027-04-10T23:30', actual_start: '', outcome: 'planned' },
+  ];
+  const summary = buildVisitPlanSummary(itinerary, visitId, 2);
+  assert.equal(summary.events.length, 2);
+  assert.ok(summary.events.every(event => event.id !== 'sleep_filler'));
+  assert.equal(summary.events[1].id, 'late_plan');
+  assert.equal(summary.events[1].actualStart, '2027-04-10T20:30');
+  assert.equal(summary.events[1].outcome, 'delayed');
+  assert.ok(summary.hiddenCount >= 1);
 });
 
 test('whole-trip bounds take the short way across the international date line', () => {

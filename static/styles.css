@@ -165,13 +165,18 @@ button:not(:disabled):active { transform: translateY(1px); }
 .schedule-piece.selected { outline: 3px solid #10283d; outline-offset: 1px; filter: saturate(1.12) brightness(1.03); z-index: 12; }
 .schedule-piece.dimmed { opacity: .78; filter: saturate(.88); }
 .event-piece.locked::after { content: "✓"; position: absolute; right: 3px; top: 2px; font-size: 8px; }
-.place-travel-piece { min-width: 40px; border-color: rgba(255,255,255,.78); }
+.place-travel-piece { min-width: 2px; height: 40px; padding: 6px 8px; border-color: rgba(255,255,255,.78); line-height: 1.15; }
 .place-travel-piece strong, .place-travel-piece small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.place-travel-piece strong { font-size: 9px; }.place-travel-piece small { margin-top: 1px; font-size: 7px; opacity: .86; }
+.place-travel-piece strong { font-size: 10px; }.place-travel-piece small { margin-top: 3px; font-size: 8px; opacity: .88; }
 .stay-piece { padding-left: 8px; color: white; background: #527f83; text-align: left; }
 .travel-piece { color: #173042; }
+.travel-piece.narrow { padding-inline: 2px; text-align: center; }.travel-piece.narrow strong { font-size: 8px; }
 .transit-day-cue { padding-left: 8px; color: #435866; border: 1px dashed #8095a0; background: repeating-linear-gradient(-45deg, #eef3f5, #eef3f5 8px, #e4ecef 8px, #e4ecef 16px); text-align: left; }
-.untimed-travel-cue { left: 8px; right: 8px; width: auto; height: 30px; border: 1px dashed #536b78; text-align: left; background-image: linear-gradient(90deg, rgba(255,255,255,.40), rgba(255,255,255,.72)); }
+.unknown-transition-piece { color: #435866; border: 1px dashed #6f8792; background: linear-gradient(90deg, #eef3f5, #f8fafb); text-align: left; }
+.disrupted-travel-cue { position: absolute; left: 8px; right: 8px; display: flex; align-items: center; gap: 7px; height: 21px; overflow: hidden; padding: 2px 8px; border: 1px dashed #a57a70; border-radius: 6px; background: #f8f1ef; color: #694b45; text-align: left; cursor: pointer; }
+.disrupted-travel-cue strong { flex: 0 0 auto; font-size: 8px; text-transform: capitalize; }.disrupted-travel-cue span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 8px; }
+.presence-conflict { position: absolute; left: 8px; right: 8px; display: flex; align-items: center; gap: 8px; height: 21px; padding: 2px 8px; border: 1px solid #dfbd82; border-radius: 6px; background: #fff8e9; color: #725512; font-size: 8px; }
+.presence-conflict strong { font-size: 9px; }
 .transport-mode-flight { background-color: #8eb4cb; }.transport-mode-train { background-color: #d9aa62; }.transport-mode-bus { background-color: #d78962; }
 .transport-mode-ferry { background-color: #78aaa9; }.transport-mode-transfer { background-color: #b6a6c8; }.transport-mode-walk { background-color: #8faf7f; }.transport-mode-mixed { background-color: #aeb8bf; }
 .travel-piece.outcome-missed, .travel-piece.outcome-cancelled, .travel-piece.outcome-skipped { border: 2px dashed #6d4e4e; }
@@ -289,6 +294,15 @@ body.timeline-detail-open { overflow: hidden; }
 .map-meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; }
 .map-card-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
 .map-open-button { margin-top: 11px; }
+.map-visit-plans { max-height: 230px; margin-top: 12px; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafb; }
+.map-visit-plans h3 { margin: 0 0 7px; color: var(--navy); font-size: 11px; }
+.map-visit-plans ol { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.map-visit-plans li { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 8px; align-items: baseline; }
+.map-visit-plans time { color: var(--muted); font-size: 9px; }
+.map-visit-plans strong { overflow-wrap: anywhere; font-size: 10px; }
+.map-visit-plans small { grid-column: 2; color: #775512; font-size: 8px; text-transform: capitalize; }
+.map-visit-plans p { margin: 8px 0 0; color: var(--muted); font-size: 9px; }
+.map-visit-bookings { padding-top: 8px; border-top: 1px solid var(--line); }
 .map-route-list { overflow: auto; padding: 8px; }
 .map-route-row { width: 100%; display: grid; grid-template-columns: 32px minmax(0,1fr) 72px; gap: 7px; align-items: center; border: 0; border-bottom: 1px solid #e4eaed; background: transparent; text-align: left; padding: 8px 6px; color: var(--ink); }
 .map-route-row:hover { background: #f1f5f7; }
@@ -522,3 +536,11 @@ body.map-expanded-open { overflow: hidden; }
 .handoff-content{max-width:1080px;margin:0 auto;padding:20px}.handoff-hero{display:flex;justify-content:space-between;gap:18px;align-items:start;padding:20px;border-radius:14px;background:linear-gradient(135deg,#edf5f6,#fff);border:1px solid var(--line)}.handoff-hero h2{margin:0;color:var(--navy);font-size:21px}.handoff-hero p{max-width:650px;margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.45}.handoff-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}.handoff-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px}.handoff-meta{display:block;margin-top:12px;color:var(--muted);font-size:10px;line-height:1.4}.import-preview-dialog{width:min(900px,calc(100vw - 28px));max-height:90dvh}.import-preview-content{max-height:calc(90dvh - 140px);overflow:auto;padding:16px}.import-impact{padding:12px;border:1px solid var(--line);border-radius:10px;background:#f8fbfb}.import-impact>strong{color:var(--navy);font-size:15px}.import-impact p{margin:5px 0 0;color:var(--muted);font-size:11px}.import-empty{text-align:center;padding:35px 15px}.import-empty h3{margin:0;color:var(--navy)}.import-empty p{color:var(--muted);font-size:12px}.import-group{margin-top:12px;border:1px solid var(--line);border-radius:10px;background:#fff}.import-group summary{display:flex;justify-content:space-between;cursor:pointer;padding:11px 13px;color:var(--navy);font-size:13px;font-weight:850}.import-group summary span{color:var(--muted)}.import-change{display:grid;grid-template-columns:76px minmax(0,1fr);gap:10px;padding:10px 13px;border-top:1px solid #e6edef}.import-change.high{border-left:3px solid #c76f3c}.import-kind{align-self:start;color:#58727d;font-size:9px;font-weight:850;text-transform:uppercase}.import-change strong{color:var(--ink);font-size:11px}.import-change p{margin:4px 0 0;color:var(--muted);font-size:10px;overflow-wrap:anywhere}.import-change b{color:var(--navy)}
 @media(max-width:720px){.handoff-content{padding:11px}.handoff-hero{flex-direction:column;padding:15px}.handoff-grid{grid-template-columns:1fr;gap:11px;margin-top:11px}.handoff-actions>*{flex:1}.import-preview-dialog{width:calc(100vw - 16px);max-height:96dvh}.import-preview-content{max-height:calc(96dvh - 140px);padding:12px}.import-change{grid-template-columns:1fr;gap:4px}.import-kind{font-size:8px}}
 .today-content{max-width:1120px;margin:auto;padding:18px}.today-hero{display:flex;justify-content:space-between;align-items:center;padding:18px;border-radius:14px;background:#edf5f6}.today-hero h2{margin:3px 0;color:var(--navy)}.today-hero p,.today-hero small{margin:0;color:var(--muted)}.today-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:14px}.today-grid h2,.today-schedule h2{font-size:15px;color:var(--navy)}.today-event{padding:13px;border:1px solid var(--line);border-radius:10px;background:#fff}.today-event h3{margin:4px 0;color:var(--navy)}.today-event p{font-size:11px;color:var(--muted)}.today-event span{font-size:9px;font-weight:800;text-transform:uppercase}.today-event div{display:flex;gap:6px;flex-wrap:wrap}.today-schedule{margin-top:14px}.today-schedule>.today-event{margin-top:8px}.today-money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:8px 0 12px}.today-money>div{padding:10px;border:1px solid #dfe8eb;border-radius:9px;background:#f8fbfb}.today-money>div.incomplete{border-style:dashed;border-color:#d9c18a;background:#fffaf0}.today-money small,.today-money strong,.today-money p{display:block}.today-money small{color:var(--muted);font-size:9px;font-weight:800;text-transform:uppercase}.today-money strong{margin-top:4px;color:var(--navy);font-size:15px}.today-money p{margin:4px 0 0;color:var(--muted);font-size:9px;line-height:1.35}@media(max-width:720px){.today-content{padding:11px}.today-hero{align-items:stretch;flex-direction:column;gap:10px}.today-grid{grid-template-columns:1fr;gap:10px}.today-hero button{width:100%}.today-money{grid-template-columns:1fr}}
+
+/* Linked-cost currency context stays readable without turning Booking cards into tables. */
+.booking-finance{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+.booking-finance strong{font-size:10px;line-height:1.35;overflow-wrap:anywhere}
+.booking-home-currency{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.booking-home-currency .linkish-button{font-size:10px}
+.money-preview{display:block;color:#506b78;font-size:10px;font-weight:650;line-height:1.35;text-transform:none;letter-spacing:normal}
+@media(max-width:720px){.booking-card-actions{flex-wrap:wrap}.booking-card-actions>*{flex:1 1 42%}.booking-finance{grid-template-columns:1fr;gap:7px}}

@@ -42,13 +42,13 @@ Changing providers should require configuration, not edits to trip logic. A cust
 
 Primary visits use numbered DOM markers anchored exactly to itinerary longitude/latitude. Repeated visits at the same coordinates share one grouped marker whose badge and popup expose each visit in trip order; visits are never moved away from the real place merely to avoid overlap. Locations referenced by events but not visits use smaller secondary dots.
 
-Travel/Hike events with valid `from_location_id` and `to_location_id` references become route segments. When a consecutive visit has no complete travel event, the visit's arrival information supplies a fallback segment. Every current segment has `geometryKind: "schematic"` in the derived browser model and is drawn as a dashed endpoint connection. Popups and details repeat that it is approximate. Real route geometry can later replace the geometry resolver without coupling it to the basemap provider; it is not yet a persisted schema-v8 field.
+Travel/Hike events with valid `from_location_id` and `to_location_id` references become route segments. When a consecutive visit has no complete travel event, the visit's arrival information supplies a fallback segment. Every current segment has `geometryKind: "schematic"` in the derived browser model and is drawn as a dashed endpoint connection. User-facing copy calls this an **approximate map connection** and explains that it does not trace the actual road, railway, flight path, ferry route or walking trail. Real route geometry can later replace the geometry resolver without coupling it to the basemap provider; it is not yet a persisted schema-v8 field.
 
 Popup content is constructed with DOM nodes and `textContent`, not raw itinerary HTML.
 
 ## Network failure and offline limits
 
-If the online style cannot load, the map switches to a local blank style and keeps trip markers, schematic routes, controls and itinerary-side details available. If individual tile resources fail after the style loads, a map-specific warning appears and the rest of Trip Planner continues normally. The PWA app shell caches the locally vendored MapLibre runtime, but deliberately does not cache OpenFreeMap's third-party style, tiles, fonts or sprites; see [offline read resilience](offline.md).
+If the online style cannot load, the map switches to a local blank style and keeps trip markers, approximate trip connections, controls and itinerary-side details available. If individual tile resources fail after the style loads, a map-specific warning appears and the rest of Trip Planner continues normally. The PWA app shell caches the locally vendored MapLibre runtime, but deliberately does not cache OpenFreeMap's third-party style, tiles, fonts or sprites; see [offline read resilience](offline.md).
 
 The application JavaScript and CSS work from the home server, but roads, labels, sprites, fonts and vector tiles are not available offline unless already cached by the browser. There is no offline download workflow in this version.
 

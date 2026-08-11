@@ -1,7 +1,7 @@
 import { loadMapConfig } from './map-config.js?v=map-marker-anchor-1';
-import { buildTripMapModel, routeForDay } from './map-data.js?v=map-marker-anchor-1';
+import { buildTripMapModel, buildVisitPlanSummary, routeForDay } from './map-data.js?v=map-visit-plans-1';
 import { TripMap } from './map-view.js?v=map-marker-anchor-1';
-import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuantity } from './budget.js?v=budget-v7';
+import { calculateBudget, changeBudgetBaseCurrency, decimalCompare, formatMoney, itemExpected, presentNativeAndHome, visitQuantity } from './budget.js?v=budget-v8';
 import { deriveBookingAction, groupBookings } from './booking.js?v=booking-v2';
 import { semanticDiff } from './import-diff.js?v=import-v1';
 import { deriveToday } from './today.js?v=today-v3';
@@ -9,7 +9,7 @@ import { createSnapshot, readOfflineSnapshot, saveOfflineSnapshot, clearOfflineS
 import {
   clipFloatingIntervalToDay, derivePlacesTravelDays, filteredEvents, normaliseCategorySelection,
   normaliseScheduleMode, selectionAfterFilter, setCategoryVisibility,
-} from './timeline.js?v=schedule-modes-v5';
+} from './timeline.js?v=presence-v1';
 
 'use strict';
 
@@ -524,35 +524,28 @@ function eventDayContent(day, events, search, data) {
 
 function placesTravelDayContent(day, model, search) {
   const matches = item => !search || `${item.name || ''} ${item.country || ''} ${item.title || ''} ${item.mode || ''} ${item.from || ''} ${item.to || ''} ${item.outcome || ''}`.toLowerCase().includes(search);
-  const stays = (model.days[day.date]?.stays || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
-  const travel = (model.days[day.date]?.travel || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
-  const untimed = (model.days[day.date]?.untimedTravel || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
-  const transit = (model.days[day.date]?.transit || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
-  assignLanes(stays); assignLanes(travel); assignLanes(transit);
-  const stayLanes = stays.length ? Math.max(...stays.map(piece => piece.lane)) + 1 : 0;
-  const travelLanes = travel.length ? Math.max(...travel.map(piece => piece.lane)) + 1 : 0;
-  const transitLanes = transit.length ? Math.max(...transit.map(piece => piece.lane)) + 1 : 0;
-  const stayTop = 6; const transitTop = stayTop + stayLanes * 28 + (transitLanes ? 7 : 0); const travelTop = transitTop + transitLanes * 28 + (travelLanes ? 7 : 0);
-  const untimedTop = travelTop + travelLanes * 28 + (untimed.length ? 7 : 0);
-  const height = Math.max(46, untimedTop + untimed.length * 34 + 6);
-  const stayHtml = stays.map(piece => {
-    const item = piece.item;
-    return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, 'place-travel-piece stay-piece')}" data-selection-kind="place" data-selection-id="${escapeHtml(item.id)}" style="left:0%;width:100%;top:${stayTop + piece.lane * 28}px" title="${escapeHtml(`${item.name} · ${item.country} · ${item.start} to ${item.end}`)}"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.country)}</small></button>`;
-  }).join('');
-  const travelHtml = travel.map(piece => {
+  const entry = model.days[day.date] || { presence: [], conflicts: [] };
+  const pieces = entry.presence.map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => piece.item && matches(piece.item));
+  const disrupted = (entry.disruptedTravel || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => piece.item && matches(piece.item));
+  const conflictTop = 52 + disrupted.length * 25;
+  const height = 52 + disrupted.length * 25 + (entry.conflicts.length ? 25 : 0);
+  const html = pieces.map(piece => {
     const item = piece.item; const left = piece.startMinute / 1440 * 100; const width = Math.max((piece.endMinute - piece.startMinute) / 1440 * 100, .12);
-    const outcome = item.outcome === 'planned' ? '' : ` · ${item.outcome}`;
-    return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, `place-travel-piece travel-piece transport-mode-${item.modeKey} outcome-${item.outcome}`)}" data-selection-kind="travel" data-selection-id="${escapeHtml(item.id)}" style="left:${left}%;width:${width}%;top:${travelTop + piece.lane * 28}px" title="${escapeHtml(`${item.mode}: ${item.from} → ${item.to}${outcome}`)}"><strong>${escapeHtml(item.mode)}</strong><small>${escapeHtml(`${item.from} → ${item.to}${outcome}`)}</small></button>`;
+    if (item.kind === 'stay') {
+      const showCountry = width >= 13;
+      return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, 'place-travel-piece stay-piece presence-piece')}" data-selection-kind="place" data-selection-id="${escapeHtml(item.id)}" style="left:${left}%;width:${width}%;top:6px" title="${escapeHtml(`${item.name} · ${item.country} · ${item.start} to ${item.end}`)}" aria-label="At ${escapeHtml(item.name)} from minute ${piece.startMinute} to ${piece.endMinute}"><strong>${escapeHtml(item.name)}</strong>${showCountry ? `<small>${escapeHtml(item.country)}</small>` : ''}</button>`;
+    }
+    if (item.kind === 'travel') {
+      const outcome = item.outcome === 'planned' ? '' : ` · ${item.outcome}`; const showRoute = width >= 12; const narrow = width < 6;
+      const modeLabel = narrow ? ({ flight: 'Air', train: 'Rail', ferry: 'Boat', walk: 'Walk', bus: 'Bus', transfer: 'Car', mixed: 'Trip' })[item.modeKey] || item.mode : item.mode;
+      return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, `place-travel-piece travel-piece presence-piece ${narrow ? 'narrow' : ''} transport-mode-${item.modeKey} outcome-${item.outcome}`)}" data-selection-kind="travel" data-selection-id="${escapeHtml(item.id)}" style="left:${left}%;width:${width}%;top:6px" title="${escapeHtml(`${item.mode}: ${item.from} → ${item.to}${outcome}`)}" aria-label="${escapeHtml(`${item.mode} from ${item.from} to ${item.to}${outcome}`)}"><strong>${escapeHtml(modeLabel)}</strong>${showRoute ? `<small>${escapeHtml(`${item.from} → ${item.to}${outcome}`)}</small>` : ''}</button>`;
+    }
+    const label = item.kind === 'transit' ? 'In transit' : item.title;
+    return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, `place-travel-piece presence-piece ${item.kind === 'transit' ? 'transit-day-cue' : 'unknown-transition-piece'}`)}" data-selection-kind="${item.kind === 'transit' ? 'transit' : 'unknown'}" data-selection-id="${escapeHtml(item.id)}" style="left:${left}%;width:${width}%;top:6px" title="${escapeHtml(item.summary || label)}"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(item.summary || 'Exact location is not recorded')}</small></button>`;
   }).join('');
-  const transitHtml = transit.map(piece => {
-    const item = piece.item;
-    return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, 'place-travel-piece transit-day-cue')}" data-selection-kind="transit" data-selection-id="${escapeHtml(item.id)}" style="left:0%;width:100%;top:${transitTop + piece.lane * 28}px" title="${escapeHtml(`In transit: ${item.summary || 'no physical location recorded'}`)}"><strong>In transit</strong><small>${escapeHtml(item.summary || 'No physical base recorded for this day')}</small></button>`;
-  }).join('');
-  const untimedHtml = untimed.map((piece, index) => {
-    const item = piece.item;
-    return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, `place-travel-piece untimed-travel-cue transport-mode-${item.modeKey}`)}" data-selection-kind="travel" data-selection-id="${escapeHtml(item.id)}" style="top:${untimedTop + index * 34}px" title="${escapeHtml(`Timing not recorded: ${item.mode}, ${item.from} → ${item.to}`)}"><strong>Timing not recorded</strong><small>${escapeHtml(`${item.mode} · ${item.from} → ${item.to}`)}</small></button>`;
-  }).join('');
-  return { html: stayHtml + transitHtml + travelHtml + untimedHtml, height, count: stays.length + transit.length + travel.length + untimed.length };
+  const disruptedHtml = disrupted.map((piece, index) => `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, piece.item.id, `disrupted-travel-cue outcome-${piece.item.outcome}`)}" data-selection-kind="travel" data-selection-id="${escapeHtml(piece.item.id)}" style="top:${52 + index * 25}px" title="${escapeHtml(`${piece.item.title} · ${piece.item.outcome}`)}"><strong>${escapeHtml(piece.item.outcome.replaceAll('_', ' '))}</strong><span>${escapeHtml(piece.item.title)}</span></button>`).join('');
+  const conflict = entry.conflicts.length ? `<div class="presence-conflict" style="top:${conflictTop}px" title="${escapeHtml(entry.conflicts.map(item => item.message).join(' '))}" role="note"><strong>Travel timeline conflict</strong><span>${entry.conflicts.length} issue${entry.conflicts.length === 1 ? '' : 's'} in the recorded legs</span></div>` : '';
+  return { html: html + disruptedHtml + conflict, height, count: pieces.length + disrupted.length };
 }
 
 function renderDayView() {
@@ -610,6 +603,9 @@ function eventDetailsHtml(event, data, { mobile = false } = {}) {
   const lastDay = formatDateKey(parseFloating(event.end) - 1); const spanDays = daysBetween(firstDay, lastDay) + 1;
   const summaries = (event.day_summaries || []).map(summary => `<li>${escapeHtml(summary)}</li>`).join('');
   const outcome = String(event.outcome || 'planned').replaceAll('_', ' ');
+  const linkedBooking = data.bookings.find(booking => booking.event_id === event.id);
+  const linkedCost = data.budget.cost_items.find(cost => cost.event_id === event.id || (linkedBooking && (cost.id === linkedBooking.cost_item_id || cost.booking_id === linkedBooking.id)));
+  const linkedCostText = linkedCost ? presentNativeAndHome(itemExpected(linkedCost, data), linkedCost, data.budget.base_currency).text : '';
   const actual = event.actual_start || event.actual_end || event.outcome_note ? `<div class="details-section"><h3>What actually happened</h3><p>${event.actual_start ? `Started ${escapeHtml(humanDateTime(event.actual_start))}` : ''}${event.actual_start && event.actual_end ? '<br>' : ''}${event.actual_end ? `Ended ${escapeHtml(humanDateTime(event.actual_end))}` : ''}${event.outcome_note ? `<br>${escapeHtml(event.outcome_note)}` : ''}</p></div>` : '';
   return `<div class="details-card">
     <div class="details-heading"><div><span class="details-category ${contrastClass(colourForCategory(event.category, data))}">${escapeHtml(event.category)}</span><h2 ${mobile ? 'id="timeline-detail-title"' : ''}>${escapeHtml(event.title)}</h2></div>${mobile ? '' : '<button type="button" class="icon-button" data-close-timeline aria-label="Close event details">×</button>'}</div>
@@ -621,6 +617,7 @@ function eventDetailsHtml(event, data, { mobile = false } = {}) {
       <div class="detail-box"><small>Plan state</small><strong>${event.locked ? 'Locked / confirmed' : 'Planning draft'}</strong></div>
       ${event.transport_mode ? `<div class="detail-box"><small>Transport</small><strong>${escapeHtml(event.transport_mode)}</strong></div>` : ''}
       ${(from || to) ? `<div class="detail-box"><small>Route</small><strong>${escapeHtml(from?.name || '—')} → ${escapeHtml(to?.name || '—')}</strong></div>` : ''}
+      ${linkedCost ? `<div class="detail-box"><small>Expected cost</small><strong>${escapeHtml(linkedCostText)}</strong></div>` : ''}
     </div>
     ${actual}${event.notes ? `<div class="details-section"><h3>Event and planning notes</h3><p>${escapeHtml(event.notes)}</p></div>` : ''}
     ${summaries ? `<div class="details-section"><h3>Daily context</h3><ul>${summaries}</ul></div>` : ''}
@@ -677,13 +674,17 @@ function placeTravelDetailsHtml(item, data, { mobile = false } = {}) {
       <div class="details-section"><h3>Day context</h3><p>${escapeHtml(item.summary || 'This day is explicitly marked as not being spent at a physical visit base.')}</p></div>
       <div class="details-section"><h3>Travel recorded</h3>${travel.length ? `<ul>${travel.map(event => `<li>${escapeHtml(event.title)} · ${escapeHtml(event.transport_mode)}</li>`).join('')}</ul>` : '<p>No exact transport event is recorded for this day.</p>'}</div></div>`;
   }
+  if (item.kind === 'unknown_transition') {
+    return `<div class="details-card"><div class="details-heading"><div><span class="details-category">Timing unknown</span><h2 ${mobile ? 'id="timeline-detail-title"' : ''}>${escapeHtml(item.title)}</h2><p class="details-kicker">${escapeHtml(item.from && item.to ? `${item.from} → ${item.to}` : item.date)}</p></div>${mobile ? '' : '<button type="button" class="icon-button" data-close-timeline aria-label="Close transition details">×</button>'}</div><div class="details-time"><strong>No clock time recorded</strong><span>The timeline does not invent a departure or arrival time.</span></div><div class="details-section"><h3>What is known</h3><p>${escapeHtml(item.summary)}</p></div>${item.visitId ? `<div class="details-section details-actions"><button class="secondary-button" data-place-map-visit="${escapeHtml(item.visitId)}">Show destination on map</button></div>` : ''}</div>`;
+  }
   const event = data.events.find(candidate => candidate.id === item.eventId); const booking = event ? data.bookings.find(candidate => candidate.event_id === event.id) : null;
   const cost = event ? data.budget.cost_items.find(candidate => candidate.event_id === event.id || (booking && candidate.id === booking.cost_item_id)) : null;
   const actual = item.actualStart || item.actualEnd ? `<div class="details-section"><h3>Actual journey</h3><p>${item.actualStart ? `Departed ${escapeHtml(humanDateTime(item.actualStart))}` : ''}${item.actualStart && item.actualEnd ? '<br>' : ''}${item.actualEnd ? `Arrived ${escapeHtml(humanDateTime(item.actualEnd))}` : ''}</p></div>` : '';
   const timing = item.timed ? `<strong>${humanDateTime(item.start)}</strong><span>until ${humanDateTime(item.end)}</span>` : `<strong>Timing not recorded</strong>${item.estimatedDurationHours ? `<span>Estimated duration: ${escapeHtml(item.estimatedDurationHours)} hours</span>` : '<span>Arrival method is known, but no exact time is stored.</span>'}`;
+  const costText = cost ? presentNativeAndHome(itemExpected(cost, data), cost, data.budget.base_currency).text : '';
   return `<div class="details-card"><div class="details-heading"><div><span class="details-category">${escapeHtml(item.mode)}</span><h2 ${mobile ? 'id="timeline-detail-title"' : ''}>${escapeHtml(item.from)} → ${escapeHtml(item.to)}</h2><p class="details-kicker">${item.estimated ? 'Estimated from visit arrival information' : escapeHtml(item.title)}</p></div>${mobile ? '' : '<button type="button" class="icon-button" data-close-timeline aria-label="Close journey details">×</button>'}</div>
     <div class="details-time">${timing}</div>
-    <div class="details-grid"><div class="detail-box"><small>Mode</small><strong>${escapeHtml(item.mode)}</strong></div><div class="detail-box"><small>Outcome</small><strong>${escapeHtml(String(item.outcome).replaceAll('_', ' '))}</strong></div><div class="detail-box"><small>Provider</small><strong>${escapeHtml(booking?.provider || 'Not recorded')}</strong></div><div class="detail-box"><small>Reference</small><strong>${escapeHtml(booking?.reference || 'Not recorded')}</strong></div>${cost ? `<div class="detail-box"><small>Expected cost</small><strong>${escapeHtml(formatMoney(itemExpected(cost, data), cost.currency))}</strong></div>` : ''}</div>
+    <div class="details-grid"><div class="detail-box"><small>Mode</small><strong>${escapeHtml(item.mode)}</strong></div><div class="detail-box"><small>Outcome</small><strong>${escapeHtml(String(item.outcome).replaceAll('_', ' '))}</strong></div><div class="detail-box"><small>Provider</small><strong>${escapeHtml(booking?.provider || 'Not recorded')}</strong></div><div class="detail-box"><small>Reference</small><strong>${escapeHtml(booking?.reference || 'Not recorded')}</strong></div>${cost ? `<div class="detail-box"><small>Expected cost</small><strong>${escapeHtml(costText)}</strong></div>` : ''}</div>
     ${actual}${event?.outcome_note || event?.notes ? `<div class="details-section"><h3>Journey notes</h3><p>${escapeHtml(event.outcome_note || event.notes)}</p></div>` : ''}
     <div class="details-section details-actions">${item.eventId ? `<button class="secondary-button" data-place-map-event="${escapeHtml(item.eventId)}">Show route on map</button>` : `<button class="secondary-button" data-place-map-visit="${escapeHtml(item.visitId)}">Show destination on map</button>`}</div></div>`;
 }
@@ -797,7 +798,7 @@ function renderMapDayCard(day, route) {
   appendMapDetail(grid, 'Base', day.base);
   appendMapDetail(grid, 'Status', route ? 'Travelling / arriving' : 'At location');
   appendMapDetail(grid, 'Travel', route?.mode || '—');
-  appendMapDetail(grid, 'Route geometry', route ? 'Schematic / approximate' : 'No major transfer');
+  appendMapDetail(grid, 'Map connection', route ? 'Approximate route line' : 'No major transfer');
   panel.append(grid);
   const actions = document.createElement('div');
   actions.className = 'map-card-actions';
@@ -816,6 +817,7 @@ function renderMapDayCard(day, route) {
 }
 
 function renderMapVisitCard(visit) {
+  const data = currentData();
   const panel = el('map-day-card');
   panel.replaceChildren(mapHeading(`${visit.order}. ${visit.name}`, `${visit.country} · ${visit.startDate} to ${visit.endDate}`, visit.notes));
   const grid = document.createElement('div');
@@ -824,7 +826,47 @@ function renderMapVisitCard(visit) {
   appendMapDetail(grid, 'Plans', `${visit.eventCount} event${visit.eventCount === 1 ? '' : 's'}`);
   appendMapDetail(grid, 'Bookings', visit.bookingCount);
   appendMapDetail(grid, 'Accommodation', visit.accommodation.join(', ') || 'Not linked');
+  const visitBudget = calculateBudget(data).visits.find(row => row.id === visit.id);
+  appendMapDetail(grid, 'Expected budget', visitBudget
+    ? `${formatMoney(visitBudget.expected, data.budget.base_currency)}${visitBudget.completeness.expected.complete ? '' : ' convertible subtotal · incomplete FX'}`
+    : 'No visit-linked costs');
   panel.append(grid);
+  const planSummary = buildVisitPlanSummary(data, visit.id, 6);
+  const plans = document.createElement('section');
+  plans.className = 'map-visit-plans';
+  const plansHeading = document.createElement('h3'); plansHeading.textContent = "What you're doing here"; plans.append(plansHeading);
+  if (planSummary.events.length) {
+    const list = document.createElement('ol');
+    for (const event of planSummary.events) {
+      const row = document.createElement('li');
+      const time = document.createElement('time');
+      time.dateTime = event.actualStart || event.start;
+      time.textContent = `${humanDate((event.actualStart || event.start).slice(0, 10), { year: false })} · ${humanTime(event.actualStart || event.start)}`;
+      const title = document.createElement('strong'); title.textContent = event.title;
+      row.append(time, title);
+      if (event.outcome && event.outcome !== 'planned') {
+        const outcome = document.createElement('small'); outcome.textContent = event.outcome.replaceAll('_', ' '); row.append(outcome);
+      }
+      list.append(row);
+    }
+    plans.append(list);
+    if (planSummary.hiddenCount) {
+      const note = document.createElement('p'); note.textContent = `${planSummary.hiddenCount} more plan${planSummary.hiddenCount === 1 ? '' : 's'} available in Schedule.`; plans.append(note);
+    }
+  } else {
+    const empty = document.createElement('p'); empty.textContent = 'No notable activities or journeys are linked to this visit yet.'; plans.append(empty);
+  }
+  const visitEventIds = new Set(data.events.filter(event => event.visit_id === visit.id).map(event => event.id));
+  const visitBookings = data.bookings.filter(booking => booking.visit_id === visit.id
+    || visitEventIds.has(booking.event_id)
+    || (booking.location_id === visit.locationId && booking.date >= visit.startDate && booking.date <= visit.endDate)).slice(0, 3);
+  if (visitBookings.length) {
+    const bookingSummary = document.createElement('p');
+    bookingSummary.className = 'map-visit-bookings';
+    bookingSummary.textContent = `Important bookings: ${visitBookings.map(booking => `${booking.title} (${booking.lifecycle.replaceAll('_', ' ')})`).join('; ')}`;
+    plans.append(bookingSummary);
+  }
+  panel.append(plans);
   if (visit.duplicateTotal > 1) {
     const repeat = document.createElement('p');
     repeat.className = 'map-context-note';
@@ -834,24 +876,29 @@ function renderMapVisitCard(visit) {
   const open = document.createElement('button');
   open.type = 'button';
   open.className = 'secondary-button map-open-button';
-  open.textContent = 'Open first day of visit';
-  open.addEventListener('click', () => { switchTab('day'); jumpToDate(visit.startDate); });
+  open.textContent = 'Open this visit in Schedule';
+  open.addEventListener('click', () => { switchTab('day'); setScheduleMode('places'); jumpToDate(visit.startDate); });
   panel.append(open);
 }
 
 function renderMapRouteCard(route) {
+  const data = currentData();
   const panel = el('map-day-card');
   panel.replaceChildren(mapHeading(route.title, `${route.fromName} → ${route.toName}`, route.notes));
   const grid = document.createElement('div');
   grid.className = 'map-meta-grid';
   appendMapDetail(grid, 'Mode', route.mode);
-  appendMapDetail(grid, 'Geometry', 'Schematic / approximate');
+  appendMapDetail(grid, 'Map line', 'Approximate connection');
   appendMapDetail(grid, 'Departure', route.start?.replace('T', ' ') || 'Not scheduled');
   appendMapDetail(grid, 'Arrival', route.end?.replace('T', ' ') || 'Not scheduled');
+  const event = route.eventId ? data.events.find(item => item.id === route.eventId) : null;
+  const booking = event ? data.bookings.find(item => item.event_id === event.id) : null;
+  const cost = event ? data.budget.cost_items.find(item => item.event_id === event.id || (booking && (item.id === booking.cost_item_id || item.booking_id === booking.id))) : null;
+  if (cost) appendMapDetail(grid, 'Expected cost', presentNativeAndHome(itemExpected(cost, data), cost, data.budget.base_currency).text);
   panel.append(grid);
   const note = document.createElement('p');
   note.className = 'map-context-note';
-  note.textContent = 'The dashed line connects known endpoints; it is not the actual road, rail, air, or walking alignment.';
+  note.textContent = 'This approximate route line connects the known start and end points. It does not trace the actual road, railway, flight path, ferry route, or walking trail.';
   panel.append(note);
   if (route.eventId) {
     const open = document.createElement('button');
@@ -870,6 +917,16 @@ function renderMapRouteCard(route) {
   }
 }
 
+function revealMapDetailsOnNarrowScreen() {
+  if (!window.matchMedia('(max-width: 1050px)').matches) return;
+  window.setTimeout(() => requestAnimationFrame(() => {
+    const panel = el('map-day-card');
+    const panelTop = panel.getBoundingClientRect().top + window.scrollY - 8;
+    const maximumScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    window.scrollTo({ top: Math.min(panelTop, maximumScroll), behavior: 'auto' });
+  }), 120);
+}
+
 function selectMapVisit(visit) {
   const data = currentData();
   const dayIndex = data.days.findIndex(day => day.visit_id === visit.id);
@@ -879,6 +936,7 @@ function selectMapVisit(visit) {
   state.mapController?.setSelection({ visitId: visit.id, routeId: null });
   renderMapVisitCard(visit);
   document.querySelectorAll('.map-route-row').forEach(row => row.classList.toggle('active', row.dataset.visitId === visit.id));
+  revealMapDetailsOnNarrowScreen();
 }
 
 function selectMapRoute(route) {
@@ -887,6 +945,7 @@ function selectMapRoute(route) {
   if (dayIndex >= 0) updateMapDay(dayIndex + 1);
   state.mapController?.setSelection({ visitId: route.visitId, routeId: route.id });
   renderMapRouteCard(route);
+  revealMapDetailsOnNarrowScreen();
 }
 
 async function ensureTripMap() {
@@ -992,7 +1051,7 @@ function budgetRow(row, currency, kind) {
 function renderBudget() {
   const data = currentData(); if (!data?.budget) return;
   const summary = calculateBudget(data); const { totals, baseCurrency } = summary;
-  el('budget-toolbar-note').textContent = `Reporting in ${baseCurrency}`;
+  el('budget-toolbar-note').textContent = `Home currency: ${baseCurrency}`;
   const missingCount = totals.missingFx.length;
   const completeNote = missingCount ? `${missingCount} item${missingCount === 1 ? '' : 's'} need FX for at least one metric.` : 'All contributing amounts have a stored rate.';
   const metricCard = (metric, label, note, className = '') => {
@@ -1017,7 +1076,7 @@ function renderBudget() {
   const expectedWidth = budgetBarWidth(totals.expected, max); const committedWidth = budgetBarWidth(totals.committed, max); const paidWidth = budgetBarWidth(totals.paid, max);
   const missingFxWarnings = summary.warnings.filter(warning => warning.kind === 'missing_fx');
   const valueWarnings = summary.warnings.filter(warning => warning.kind !== 'missing_fx');
-  const warnings = `${missingFxWarnings.length ? `<div class="budget-warning budget-warning-fx" role="status"><strong>FX rates needed to complete this Budget</strong><p>${escapeHtml(`${missingFxWarnings.length} item${missingFxWarnings.length === 1 ? '' : 's'} cannot yet be included in every affected base-currency metric.`)}</p><div class="budget-warning-actions">${missingFxWarnings.map(warning => `<button class="linkish-button" data-add-fx="${escapeHtml(warning.item.id)}">${escapeHtml(warning.item.name)} — add FX</button>`).join('')}</div></div>` : ''}${valueWarnings.length ? `<div class="budget-warning"><strong>Check budget data:</strong> ${valueWarnings.slice(0, 3).map(warning => warning.kind === 'over_budget' ? 'Expected cost exceeds the trip budget.' : `${escapeHtml(warning.item.name)} needs a value review.`).join(' ')}</div>` : ''}`;
+  const warnings = `${missingFxWarnings.length ? `<div class="budget-warning budget-warning-fx" role="status"><strong>FX rates needed to complete this Budget</strong><p>${escapeHtml(`${missingFxWarnings.length} item${missingFxWarnings.length === 1 ? '' : 's'} cannot yet be included in every affected home-currency metric.`)}</p><div class="budget-warning-actions">${missingFxWarnings.map(warning => `<button class="linkish-button" data-add-fx="${escapeHtml(warning.item.id)}">${escapeHtml(warning.item.name)} — add FX</button>`).join('')}</div></div>` : ''}${valueWarnings.length ? `<div class="budget-warning"><strong>Check budget data:</strong> ${valueWarnings.slice(0, 3).map(warning => warning.kind === 'over_budget' ? 'Expected cost exceeds the trip budget.' : `${escapeHtml(warning.item.name)} needs a value review.`).join(' ')}</div>` : ''}`;
   const filterText = state.budgetSearch.trim().toLowerCase();
   const displayed = summary.items.filter(item => (!state.budgetCategoryFilter || item.category_id === state.budgetCategoryFilter || item.visit_id === state.budgetCategoryFilter) && (!filterText || `${item.name} ${item.notes} ${budgetReference(item, data)}`.toLowerCase().includes(filterText)));
   const categoryOptions = data.budget.categories.map(category => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`).join('');
@@ -1028,7 +1087,7 @@ function renderBudget() {
     const paid = `${formatMoney(item.paidAmount, item.currency)} paid`;
     const quantity = visitQuantity(item, data);
     const basis = item.expected.basis === 'fixed' ? 'Fixed' : `${formatMoney(item.expected.unit_amount, item.currency)} ${item.expected.basis.replace('_', ' ')} × ${quantity} = ${formatMoney(item.expectedAmount, item.currency)}`;
-    return `<article class="budget-item ${item.base ? '' : 'incomplete'}"><div class="budget-item-main"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(budgetReference(item, data))} · ${escapeHtml(native)} · ${escapeHtml(basis)}</small><span class="budget-item-tag">${escapeHtml(category?.name || item.category_id)}</span></div><div class="budget-amount-stack"><span>${item.base ? 'Base expected' : 'Base expected incomplete'}</span><strong>${escapeHtml(baseAmount)}</strong></div><div class="budget-amount-stack"><span>Committed / paid</span><strong>${formatMoney(item.committed_amount, item.currency)} / ${escapeHtml(paid)}</strong></div><div class="budget-item-actions">${item.base ? '' : `<button class="secondary-button small" data-add-fx="${escapeHtml(item.id)}">Add FX</button>`}<button class="secondary-button small" data-edit-cost="${escapeHtml(item.id)}">Edit</button></div></article>`;
+    return `<article class="budget-item ${item.base ? '' : 'incomplete'}"><div class="budget-item-main"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(budgetReference(item, data))} · ${escapeHtml(native)} · ${escapeHtml(basis)}</small><span class="budget-item-tag">${escapeHtml(category?.name || item.category_id)}</span></div><div class="budget-amount-stack"><span>${item.base ? 'Home expected' : 'Home expected incomplete'}</span><strong>${escapeHtml(baseAmount)}</strong></div><div class="budget-amount-stack"><span>Committed / paid</span><strong>${formatMoney(item.committed_amount, item.currency)} / ${escapeHtml(paid)}</strong></div><div class="budget-item-actions">${item.base ? '' : `<button class="secondary-button small" data-add-fx="${escapeHtml(item.id)}">Add FX</button>`}<button class="secondary-button small" data-edit-cost="${escapeHtml(item.id)}">Edit</button></div></article>`;
   }).join('') : '<div class="budget-empty">No cost items match this filter. Add an estimate or record a quick expense.</div>';
   const coverageIncomplete = ['expected', 'committed', 'paid'].some(metric => !totals.completeness[metric].complete);
   const coverageLabel = coverageIncomplete ? 'Coverage includes convertible subtotals where noted' : 'Expected, committed and paid against the trip budget';
@@ -1060,7 +1119,15 @@ function openCostDialog(existing = null, { focusFx = false } = {}) {
   state.costDialogItem = deepClone(existing || { id: '', name: '', category_id: budget.categories[0]?.id || 'miscellaneous', currency: budget.base_currency, expected: { unit_amount: '', basis: 'fixed', quantity_source: 'manual', quantity: 1 }, committed_amount: '0', fx: { rate_to_base: budget.base_currency === 'USD' ? '1' : '', as_of_date: '', source: '', note: '' }, payments: [], visit_id: '', event_id: '', booking_id: '', location_id: '', start_date: '', end_date: '', notes: '' });
   const item = state.costDialogItem;
   el('cost-dialog-title').textContent = existing ? 'Edit cost item' : 'Add cost item';
-  el('cost-id').value = item.id; el('cost-name').value = item.name; el('cost-currency').value = item.currency; el('cost-unit-amount').value = item.expected.unit_amount; el('cost-basis').value = item.expected.basis; el('cost-quantity-source').value = item.expected.quantity_source; el('cost-quantity').value = item.expected.quantity; el('cost-committed').value = item.committed_amount; el('cost-fx-rate').value = item.fx.rate_to_base; el('cost-fx-date').value = item.fx.as_of_date; el('cost-fx-source').value = item.fx.source; el('cost-notes').value = item.notes; el('cost-start-date').value = item.start_date; el('cost-end-date').value = item.end_date;
+  let fxNote = el('cost-fx-note');
+  if (!fxNote) {
+    const label = document.createElement('label'); label.className = 'span-2'; label.append('FX note');
+    fxNote = document.createElement('textarea'); fxNote.id = 'cost-fx-note'; fxNote.rows = 2; fxNote.placeholder = 'Planning context or previous rate history'; label.append(fxNote);
+    el('cost-fx-source').closest('.form-grid').append(label);
+  }
+  const rateLabel = el('cost-fx-rate').closest('label');
+  if (rateLabel?.firstChild) rateLabel.firstChild.textContent = `Rate to ${budget.base_currency} home currency`;
+  el('cost-id').value = item.id; el('cost-name').value = item.name; el('cost-currency').value = item.currency; el('cost-unit-amount').value = item.expected.unit_amount; el('cost-basis').value = item.expected.basis; el('cost-quantity-source').value = item.expected.quantity_source; el('cost-quantity').value = item.expected.quantity; el('cost-committed').value = item.committed_amount; el('cost-fx-rate').value = item.fx.rate_to_base; el('cost-fx-date').value = item.fx.as_of_date; el('cost-fx-source').value = item.fx.source; fxNote.value = item.fx.note || ''; el('cost-notes').value = item.notes; el('cost-start-date').value = item.start_date; el('cost-end-date').value = item.end_date;
   refreshSelectOptions(el('cost-category'), budget.categories.map(category => ({ value: category.id, label: category.name })), item.category_id);
   el('cost-visit').innerHTML = budgetOptions(sortedVisits(data).map(visit => ({ id: visit.id, label: `Visit ${visit.order} · ${getLocation(visit.location_id, data)?.name || visit.location_id}` })), item.visit_id); el('cost-event').innerHTML = budgetOptions(sortedEvents(data).map(event => ({ id: event.id, label: event.title })), item.event_id); el('cost-booking').innerHTML = budgetOptions(data.bookings.map(booking => ({ id: booking.id, label: booking.title })), item.booking_id); el('cost-location').innerHTML = budgetOptions(Object.values(data.locations).map(location => ({ id: location.id, label: `${location.name} · ${location.country}` })), item.location_id);
   el('delete-cost-button').hidden = !existing; el('cost-quantity').disabled = item.expected.quantity_source !== 'manual';
@@ -1070,7 +1137,7 @@ function openCostDialog(existing = null, { focusFx = false } = {}) {
 
 function applyCostDialog() {
   const item = state.costDialogItem; const data = state.draft; const source = el('cost-quantity-source').value; const basis = el('cost-basis').value;
-  item.id = el('cost-id').value || generateId('cost'); item.name = el('cost-name').value.trim(); item.category_id = el('cost-category').value; item.currency = el('cost-currency').value.trim().toUpperCase(); item.expected = { unit_amount: el('cost-unit-amount').value.trim(), basis, quantity_source: basis === 'fixed' ? 'manual' : source, quantity: basis === 'fixed' ? 1 : source === 'manual' ? Number(el('cost-quantity').value) : 0 }; item.committed_amount = el('cost-committed').value.trim() || '0'; item.fx = { rate_to_base: el('cost-fx-rate').value.trim(), as_of_date: el('cost-fx-date').value, source: el('cost-fx-source').value.trim(), note: item.fx.note || '' }; item.visit_id = el('cost-visit').value; item.event_id = el('cost-event').value; item.booking_id = el('cost-booking').value; item.location_id = el('cost-location').value; item.start_date = el('cost-start-date').value; item.end_date = el('cost-end-date').value; item.notes = el('cost-notes').value.trim();
+  item.id = el('cost-id').value || generateId('cost'); item.name = el('cost-name').value.trim(); item.category_id = el('cost-category').value; item.currency = el('cost-currency').value.trim().toUpperCase(); item.expected = { unit_amount: el('cost-unit-amount').value.trim(), basis, quantity_source: basis === 'fixed' ? 'manual' : source, quantity: basis === 'fixed' ? 1 : source === 'manual' ? Number(el('cost-quantity').value) : 0 }; item.committed_amount = el('cost-committed').value.trim() || '0'; item.fx = { rate_to_base: el('cost-fx-rate').value.trim(), as_of_date: el('cost-fx-date').value, source: el('cost-fx-source').value.trim(), note: el('cost-fx-note')?.value.trim() || '' }; item.visit_id = el('cost-visit').value; item.event_id = el('cost-event').value; item.booking_id = el('cost-booking').value; item.location_id = el('cost-location').value; item.start_date = el('cost-start-date').value; item.end_date = el('cost-end-date').value; item.notes = el('cost-notes').value.trim();
   const index = data.budget.cost_items.findIndex(candidate => candidate.id === item.id); if (index === -1) data.budget.cost_items.push(item); else data.budget.cost_items[index] = item;
   el('cost-dialog').close(); markDirty(`Budget cost changed: ${item.name || 'new item'}`); renderBudget();
 }
@@ -1096,9 +1163,19 @@ function openBudgetSettings() {
 
 function applyBudgetSettings() {
   const budget = state.draft.budget;
-  budget.base_currency = el('budget-base-currency').value.trim().toUpperCase();
-  budget.total_budget = el('budget-total-budget').value.trim();
-  el('budget-settings-dialog').close(); markDirty('Budget settings changed'); renderBudget();
+  const nextCurrency = el('budget-base-currency').value.trim().toUpperCase();
+  const nextTotal = el('budget-total-budget').value.trim();
+  if (nextCurrency !== budget.base_currency) {
+    const foreignCount = budget.cost_items.filter(item => item.currency !== nextCurrency).length;
+    const accepted = confirm(`Change home currency from ${budget.base_currency} to ${nextCurrency}?\n\nStored foreign-currency rates currently target ${budget.base_currency}. They will be cleared and preserved in FX notes, so ${foreignCount} foreign item${foreignCount === 1 ? '' : 's'} may need new rates. Native prices, commitments, and payments will not change.\n\nReview the total trip budget because it will now be interpreted as ${nextCurrency}.`);
+    if (!accepted) return;
+    const changed = changeBudgetBaseCurrency(budget, nextCurrency);
+    changed.budget.total_budget = nextTotal;
+    state.draft.budget = changed.budget;
+  } else {
+    budget.total_budget = nextTotal;
+  }
+  el('budget-settings-dialog').close(); markDirty('Budget settings changed'); renderBudget(); renderBookings();
 }
 
 /* ---------------- Bookings ---------------- */
@@ -1114,11 +1191,15 @@ function bookingGroupTitle(bucket) {
   return ({ urgent: ['Book now', 'Recommended now or overdue'], before_departure: ['Before departure', 'Resolve before the trip starts'], shortly_before: ['Book shortly before', 'Timing follows the trip date'], later: ['Book later', 'Not due yet or still researching'], on_arrival: ['On arrival', 'Intentionally left local and flexible'], booked: ['Booked', 'Confirmed reservations'], secondary: ['Cancelled / not required', 'Kept for history'] })[bucket];
 }
 function bookingCard({ booking, action }, data) {
-  const cost = bookingCost(booking, data); const currency = cost?.currency; const financial = cost ? `<div class="booking-finance"><span>Expected <strong>${formatMoney(itemExpected(cost, data), currency)}</strong></span><span>Committed <strong>${formatMoney(cost.committed_amount, currency)}</strong></span><span>Paid <strong>${formatMoney(calculateBudget(data).items.find(item => item.id === cost.id)?.paidAmount || '0', currency)}</strong></span></div>` : '';
+  const cost = bookingCost(booking, data); const budgetItem = cost ? calculateBudget(data).items.find(item => item.id === cost.id) : null;
+  const money = amount => presentNativeAndHome(amount, cost, data.budget.base_currency);
+  const financialValues = cost ? [money(itemExpected(cost, data)), money(cost.committed_amount), money(budgetItem?.paidAmount || '0')] : [];
+  const financial = cost ? `<div class="booking-finance"><span>Expected <strong>${escapeHtml(financialValues[0].text)}</strong></span><span>Committed <strong>${escapeHtml(financialValues[1].text)}</strong></span><span>Paid <strong>${escapeHtml(financialValues[2].text)}</strong></span></div>` : '';
+  const addFx = cost && financialValues.some(value => value.needsFx) ? `<button class="linkish-button" data-booking-add-fx="${escapeHtml(cost.id)}">Add FX</button>` : '';
   const reasons = action.reasons.length ? action.reasons.slice(0, 2).map(reason => `<span class="booking-reason">${escapeHtml(reason)}</span>`).join('') : '<span class="booking-reason subdued">No timing advice recorded</span>';
   const actionButton = action.actionable ? `<button class="primary-button small" data-booking-confirm="${escapeHtml(booking.id)}">${booking.lifecycle === 'ready_to_book' ? 'Mark booked' : 'Update'}</button>` : '';
   const safeUrl = /^https?:\/\//i.test(booking.url || '') ? `<a class="linkish-button" href="${escapeHtml(booking.url)}" target="_blank" rel="noopener noreferrer">Provider ↗</a>` : '';
-  return `<article class="booking-card ${action.bucket}"><div class="booking-card-main"><div class="booking-card-heading"><div><span class="booking-type">${escapeHtml(booking.type)}</span><h3>${escapeHtml(booking.title)}</h3><p>${escapeHtml(bookingReference(booking, data))}</p></div><span class="booking-lifecycle ${escapeHtml(booking.lifecycle)}">${escapeHtml(booking.lifecycle.replaceAll('_', ' '))}</span></div><div class="booking-timing"><strong>${escapeHtml(action.timingLabel)}</strong><div>${reasons}</div></div>${financial}</div><div class="booking-card-actions">${actionButton}<button class="secondary-button small" data-edit-booking="${escapeHtml(booking.id)}">Details</button>${safeUrl}</div></article>`;
+  return `<article class="booking-card ${action.bucket}"><div class="booking-card-main"><div class="booking-card-heading"><div><span class="booking-type">${escapeHtml(booking.type)}</span><h3>${escapeHtml(booking.title)}</h3><p>${escapeHtml(bookingReference(booking, data))}</p></div><span class="booking-lifecycle ${escapeHtml(booking.lifecycle)}">${escapeHtml(booking.lifecycle.replaceAll('_', ' '))}</span></div><div class="booking-timing"><strong>${escapeHtml(action.timingLabel)}</strong><div>${reasons}</div></div>${financial}</div><div class="booking-card-actions">${actionButton}<button class="secondary-button small" data-edit-booking="${escapeHtml(booking.id)}">Details</button>${addFx}${safeUrl}</div></article>`;
 }
 function renderBookings() {
   const data = currentData(); if (!data) return;
@@ -1132,14 +1213,29 @@ function renderBookings() {
     return `<section class="booking-section ${bucket}"><div class="booking-section-heading"><div><h2>${title}</h2><p>${note}</p></div><span>${entries.length}</span></div><div class="booking-list">${entries.map(entry => bookingCard(entry, data)).join('')}</div></section>`;
   }).join('') || '<div class="budget-empty">No bookings match this view. Add a booking when there is something to research or reserve.</div>';
   el('booking-today-note').textContent = `Action dates calculated for ${humanDate(today)}`;
-  el('bookings-content').innerHTML = `<section class="booking-intro"><div><h2>What needs attention?</h2><p>Timing is based on the itinerary and stored research advice—not a manual priority score.</p></div><div class="booking-filters"><select id="booking-status-filter" aria-label="Booking status"><option value="actionable">Actionable first</option><option value="">All lifecycle states</option><option value="not_researched">Not researched</option><option value="researching">Researching</option><option value="ready_to_book">Ready to book</option><option value="booked">Booked</option><option value="cancelled">Cancelled</option><option value="not_required">Not required</option></select><select id="booking-type-filter" aria-label="Booking type"><option value="">All booking types</option>${types.map(type => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join('')}</select></div></section>${sections}`;
+  el('bookings-content').innerHTML = `<section class="booking-intro"><div><h2>What needs attention?</h2><p>Timing is based on the itinerary and stored research advice—not a manual priority score.</p><p class="booking-home-currency">Home currency: <strong>${escapeHtml(data.budget.base_currency)}</strong> <button type="button" class="linkish-button" data-booking-budget-settings>Budget settings</button></p></div><div class="booking-filters"><select id="booking-status-filter" aria-label="Booking status"><option value="actionable">Actionable first</option><option value="">All lifecycle states</option><option value="not_researched">Not researched</option><option value="researching">Researching</option><option value="ready_to_book">Ready to book</option><option value="booked">Booked</option><option value="cancelled">Cancelled</option><option value="not_required">Not required</option></select><select id="booking-type-filter" aria-label="Booking type"><option value="">All booking types</option>${types.map(type => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join('')}</select></div></section>${sections}`;
   el('booking-status-filter').value = state.bookingStatusFilter; el('booking-type-filter').value = state.bookingTypeFilter;
   el('booking-status-filter').addEventListener('change', event => { state.bookingStatusFilter = event.target.value; renderBookings(); });
   el('booking-type-filter').addEventListener('change', event => { state.bookingTypeFilter = event.target.value; renderBookings(); });
   document.querySelectorAll('[data-edit-booking]').forEach(button => button.addEventListener('click', () => openBookingDialog(data.bookings.find(item => item.id === button.dataset.editBooking))));
   document.querySelectorAll('[data-booking-confirm]').forEach(button => button.addEventListener('click', () => openBookingDialog(data.bookings.find(item => item.id === button.dataset.bookingConfirm), true)));
+  document.querySelectorAll('[data-booking-add-fx]').forEach(button => button.addEventListener('click', () => openCostDialog(data.budget.cost_items.find(item => item.id === button.dataset.bookingAddFx), { focusFx: true })));
+  document.querySelector('[data-booking-budget-settings]')?.addEventListener('click', openBudgetSettings);
 }
 function defaultBooking(data) { return { id: '', title: '', type: 'Other', lifecycle: 'not_researched', timing: { strategy: 'unknown', recommended_date: '', lead_days: 0, anchor: 'event_start', hard_deadline: '', sell_out_risk: 'unknown', price_rise_risk: 'unknown', flexibility_value: 'unknown', rationale: '', confidence: 'unknown', last_researched_date: '', source_urls: [] }, date: '', time: '', duration: '', booking_deadline: '', details: '', provider: '', reference: '', url: '', notes: '', event_id: '', visit_id: '', location_id: '', cost_item_id: '', legacy: {} }; }
+function updateBookingMoneyPreviews() {
+  const data = currentData(); const cost = data?.budget?.cost_items?.find(item => item.id === el('booking-cost').value);
+  for (const [inputId, previewId] of [['booking-committed', 'booking-committed-preview'], ['booking-deposit', 'booking-deposit-preview']]) {
+    const input = el(inputId); let preview = el(previewId);
+    if (!preview) { preview = document.createElement('span'); preview.id = previewId; preview.className = 'money-preview'; input.insertAdjacentElement('afterend', preview); }
+    const amount = input.value.trim();
+    if (!cost || !amount) { preview.textContent = ''; continue; }
+    try {
+      const display = presentNativeAndHome(amount, cost, data.budget.base_currency);
+      preview.textContent = display.needsFx ? `${display.native} · ${data.budget.base_currency} preview unavailable until FX is added` : display.text;
+    } catch { preview.textContent = 'Enter an exact decimal amount.'; }
+  }
+}
 function openBookingDialog(existing = null, markBooked = false) {
   const data = currentData(); const booking = state.bookingDialogItem = deepClone(existing || defaultBooking(data)); const timing = booking.timing;
   el('booking-dialog-title').textContent = markBooked ? 'Confirm booking' : existing ? 'Edit booking' : 'Add booking';
@@ -1150,7 +1246,7 @@ function openBookingDialog(existing = null, markBooked = false) {
   el('booking-location').innerHTML = budgetOptions(Object.values(data.locations).map(location => ({ id: location.id, label: `${location.name} · ${location.country}` })), booking.location_id);
   el('booking-cost').innerHTML = budgetOptions(data.budget.cost_items.map(item => ({ id: item.id, label: `${item.name} · ${formatMoney(itemExpected(item, data), item.currency)}` })), booking.cost_item_id || data.budget.cost_items.find(item => item.booking_id === booking.id)?.id || '');
   const cost = bookingCost(booking, data); el('booking-committed').value = cost?.committed_amount || ''; el('booking-deposit').value = ''; el('booking-payment-date').value = bookingToday();
-  el('booking-finance-fieldset').hidden = false; el('booking-dialog').showModal();
+  el('booking-finance-fieldset').hidden = false; updateBookingMoneyPreviews(); el('booking-dialog').showModal();
 }
 function applyBookingDialog() {
   const data = state.draft; const booking = state.bookingDialogItem; const sourceUrls = el('booking-sources').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
@@ -1693,6 +1789,7 @@ function bindEvents() {
   el('close-booking-dialog').addEventListener('click', () => el('booking-dialog').close());
   el('cancel-booking-button').addEventListener('click', () => el('booking-dialog').close());
   el('booking-form').addEventListener('submit', event => { event.preventDefault(); applyBookingDialog(); });
+  ['booking-cost', 'booking-committed', 'booking-deposit'].forEach(id => el(id).addEventListener('input', updateBookingMoneyPreviews));
 
   el('event-search').addEventListener('input', renderEventEditor);
   el('add-event').addEventListener('click', addEvent);

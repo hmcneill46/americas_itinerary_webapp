@@ -110,6 +110,56 @@ export function itemBaseRate(item, baseCurrency) {
   return item.fx?.rate_to_base || '';
 }
 
+export function presentNativeAndHome(amount, item, baseCurrency) {
+  const nativeCurrency = item?.currency || baseCurrency;
+  const native = formatMoney(amount, nativeCurrency);
+  if (nativeCurrency === baseCurrency) {
+    return { native, home: native, homeAmount: String(amount), complete: true, text: native, needsFx: false };
+  }
+  if (decimalCompare(amount, '0') === 0) {
+    const home = formatMoney('0', baseCurrency);
+    return { native, home, homeAmount: '0', complete: true, text: `${native} · ≈ ${home}`, needsFx: false };
+  }
+  const rate = itemBaseRate(item, baseCurrency);
+  if (!rate) {
+    return { native, home: '', homeAmount: null, complete: false, text: `${native} · ${baseCurrency} unavailable — FX needed`, needsFx: true };
+  }
+  const homeAmount = decimalMultiply(amount, rate);
+  const home = formatMoney(homeAmount, baseCurrency);
+  return { native, home, homeAmount, complete: true, text: `${native} · ≈ ${home}`, needsFx: false };
+}
+
+function previousRateNote(item, oldBaseCurrency) {
+  if (item.currency === oldBaseCurrency) return '';
+  const rate = item.fx?.rate_to_base;
+  if (!rate) return '';
+  const details = [
+    `Previous planning rate to ${oldBaseCurrency}: ${rate}`,
+    item.fx.as_of_date ? `as of ${item.fx.as_of_date}` : '',
+    item.fx.source ? `source: ${item.fx.source}` : '',
+  ].filter(Boolean).join(', ');
+  return `${details}.`;
+}
+
+export function changeBudgetBaseCurrency(budget, newBaseCurrency) {
+  const oldBaseCurrency = budget.base_currency;
+  if (newBaseCurrency === oldBaseCurrency) return { budget: structuredClone(budget), invalidatedItemIds: [] };
+  const next = structuredClone(budget);
+  next.base_currency = newBaseCurrency;
+  const invalidatedItemIds = [];
+  next.cost_items = (next.cost_items || []).map(item => {
+    const oldSnapshot = previousRateNote(item, oldBaseCurrency);
+    const existingNote = item.fx?.note || '';
+    const note = [existingNote, oldSnapshot].filter(Boolean).join(existingNote && oldSnapshot ? '\n' : '');
+    if (item.currency === newBaseCurrency) {
+      return { ...item, fx: { rate_to_base: '1', as_of_date: '', source: '', note } };
+    }
+    invalidatedItemIds.push(item.id);
+    return { ...item, fx: { rate_to_base: '', as_of_date: '', source: '', note } };
+  });
+  return { budget: next, invalidatedItemIds };
+}
+
 /* A daily allocation is deliberately conservative. Per-day coverage is inclusive;
  * per-night coverage is start-inclusive/end-exclusive (checkout day has no night).
  * A manual quantity only becomes a day allocation when it exactly matches that

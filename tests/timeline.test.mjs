@@ -59,9 +59,9 @@ test('Schedule mode normalisation keeps local UI state out of arbitrary values',
 test('Places & travel expands long and repeated visits into truthful day rows', () => {
   const model = derivePlacesTravelDays(itinerary);
   assert.equal(model.stays.find(item => item.id === 'stay:visit_a_1').days, 5);
-  assert.equal(model.days['2027-04-01'].stays[0].itemId, 'stay:visit_a_1');
-  assert.equal(model.days['2027-04-05'].stays[0].itemId, 'stay:visit_a_1');
-  assert.equal(model.days['2027-04-08'].stays[0].itemId, 'stay:visit_a_2');
+  assert.equal(model.days['2027-04-01'].presence[0].itemId, 'stay:visit_a_1');
+  assert.equal(model.days['2027-04-01'].presence[0].endMinute, 1440);
+  assert.equal(model.days['2027-04-08'].presence.at(-1).itemId, 'stay:visit_a_2');
   assert.deepEqual(model.stays.map(item => `${item.name}:${item.country}`), ['Alpha:One', 'Beta:Two', 'Alpha:One']);
 });
 
@@ -70,26 +70,22 @@ test('Places & travel does not present a non-physical transit day as a full loca
   transitItinerary.days.find(entry => entry.date === '2027-04-04').is_physical_location_day = false;
   transitItinerary.days.find(entry => entry.date === '2027-04-04').base = 'In transit';
   const model = derivePlacesTravelDays(transitItinerary);
-  assert.equal(model.days['2027-04-03'].stays.length, 1, 'normal physical days retain the stay');
-  assert.equal(model.days['2027-04-04'].stays.length, 0, 'explicit non-physical day suppresses the 00:00–24:00 stay');
-  assert.equal(model.days['2027-04-04'].transit.length, 1);
-  const cue = model.items.get(model.days['2027-04-04'].transit[0].itemId);
-  assert.equal(cue.kind, 'transit');
-  assert.equal(model.days['2027-04-04'].travel.some(piece => piece.itemId === 'travel:long_trek'), true, 'explicit multi-day travel remains visible');
+  assert.equal(model.days['2027-04-03'].presence.some(piece => model.items.get(piece.itemId).kind === 'stay'), true, 'normal physical time retains location presence');
+  assert.deepEqual(model.days['2027-04-04'].presence.map(piece => [model.items.get(piece.itemId).kind, piece.startMinute, piece.endMinute]), [['travel', 0, 1440]], 'explicit multi-day travel owns the full transit day');
 });
 
 test('overnight and multi-day travel clip across each 24-hour row using actual times', () => {
   const model = derivePlacesTravelDays(itinerary);
-  const overnightDay1 = model.days['2027-04-07'].travel.find(piece => piece.itemId === 'travel:overnight');
-  const overnightDay2 = model.days['2027-04-08'].travel.find(piece => piece.itemId === 'travel:overnight');
+  const overnightDay1 = model.days['2027-04-07'].presence.find(piece => piece.itemId === 'travel:overnight');
+  const overnightDay2 = model.days['2027-04-08'].presence.find(piece => piece.itemId === 'travel:overnight');
   assert.deepEqual([overnightDay1.startMinute, overnightDay1.endMinute], [1320, 1440]);
   assert.deepEqual([overnightDay2.startMinute, overnightDay2.endMinute], [0, 360]);
   const trek = model.travel.find(item => item.id === 'travel:long_trek');
   assert.equal(trek.outcome, 'delayed');
   assert.equal(trek.displayStart, '2027-04-03T11:00');
-  assert.equal(model.days['2027-04-03'].travel.find(piece => piece.itemId === trek.id).startMinute, 660);
-  assert.equal(model.days['2027-04-04'].travel.find(piece => piece.itemId === trek.id).endMinute, 1440);
-  assert.equal(model.days['2027-04-05'].travel.find(piece => piece.itemId === trek.id).endMinute, 810);
+  assert.equal(model.days['2027-04-03'].presence.find(piece => piece.itemId === trek.id).startMinute, 660);
+  assert.equal(model.days['2027-04-04'].presence.find(piece => piece.itemId === trek.id).endMinute, 1440);
+  assert.equal(model.days['2027-04-05'].presence.find(piece => piece.itemId === trek.id).endMinute, 810);
 });
 
 test('fallback arrival context remains untimed and never invents a clock position', () => {
@@ -100,8 +96,88 @@ test('fallback arrival context remains untimed and never invents a clock positio
   assert.equal(fallback.displayEnd, '');
   assert.equal(fallback.estimatedDurationHours, 2);
   assert.deepEqual(model.days['2027-04-06'].untimedTravel, [{ itemId: 'arrival:visit_b' }]);
-  assert.equal(model.days['2027-04-06'].travel.some(piece => piece.itemId === fallback.id), false);
+  const uncertain = model.items.get(model.days['2027-04-06'].presence[0].itemId);
+  assert.equal(uncertain.kind, 'unknown_transition');
+  assert.deepEqual([model.days['2027-04-06'].presence[0].startMinute, model.days['2027-04-06'].presence[0].endMinute], [0, 1440]);
+  assert.match(uncertain.summary, /travel timing not recorded/);
   assert.equal(model.travel.some(item => item.id === 'arrival:visit_a_2'), false, 'nearby explicit travel supersedes a fallback cue');
+});
+
+function linearItinerary(events) {
+  return {
+    schema_version: 8,
+    metadata: { start_date: '2027-05-01', end_date: '2027-05-03' },
+    locations: {
+      a: { id: 'a', name: 'Alpha', country: 'One' },
+      b: { id: 'b', name: 'Beta', country: 'Two' },
+      c: { id: 'c', name: 'Gamma', country: 'Three' },
+    },
+    days: ['2027-05-01', '2027-05-02', '2027-05-03'].map((date, index) => ({ ...day(date), day_number: index + 1, visit_id: index ? 'visit_b' : 'visit_a' })),
+    visits: [
+      { id: 'visit_a', order: 1, location_id: 'a', start_date: '2027-05-01', end_date: '2027-05-02', arrival_mode: '', arrival_hours_estimate: 0 },
+      { id: 'visit_b', order: 2, location_id: 'b', start_date: '2027-05-02', end_date: '2027-05-03', arrival_mode: '', arrival_hours_estimate: 0 },
+      { id: 'visit_c', order: 3, location_id: 'c', start_date: '2027-05-02', end_date: '2027-05-03', arrival_mode: '', arrival_hours_estimate: 0 },
+    ],
+    events,
+  };
+}
+
+const leg = (id, from, to, start, end, extra = {}) => ({
+  id, title: id, category: 'Travel', transport_mode: 'Train', visit_id: `visit_${to}`,
+  from_location_id: from, to_location_id: to, start, end, actual_start: '', actual_end: '', outcome: 'planned', ...extra,
+});
+
+test('a timed transition produces one non-overlapping A to travel to B presence sequence', () => {
+  const model = derivePlacesTravelDays(linearItinerary([leg('a_b', 'a', 'b', '2027-05-02T10:00', '2027-05-02T14:00')]));
+  const pieces = model.days['2027-05-02'].presence;
+  assert.deepEqual(pieces.map(piece => [model.items.get(piece.itemId).kind, model.items.get(piece.itemId).name || model.items.get(piece.itemId).from, piece.startMinute, piece.endMinute]), [
+    ['stay', 'Alpha', 0, 600], ['travel', 'Alpha', 600, 840], ['stay', 'Beta', 840, 1440],
+  ]);
+});
+
+test('multiple coherent travel legs preserve physical continuity and actual delayed times', () => {
+  const events = [
+    leg('a_b', 'a', 'b', '2027-05-02T10:00', '2027-05-02T14:00', { actual_start: '2027-05-02T11:00', actual_end: '2027-05-02T15:00', outcome: 'delayed' }),
+    leg('b_c', 'b', 'c', '2027-05-02T17:00', '2027-05-02T19:00'),
+  ];
+  const model = derivePlacesTravelDays(linearItinerary(events));
+  assert.deepEqual(model.days['2027-05-02'].presence.map(piece => [piece.itemId, piece.startMinute, piece.endMinute]), [
+    ['stay:visit_a', 0, 660], ['travel:a_b', 660, 900], ['stay:visit_b', 900, 1020], ['travel:b_c', 1020, 1140], ['stay:visit_c', 1140, 1440],
+  ]);
+  assert.equal(model.items.get('travel:a_b').outcome, 'delayed');
+});
+
+test('contradictory or overlapping legs produce warnings without overlapping primary pieces', () => {
+  const events = [
+    leg('a_b', 'a', 'b', '2027-05-02T10:00', '2027-05-02T14:00'),
+    leg('c_a_overlap', 'c', 'a', '2027-05-02T13:00', '2027-05-02T15:00'),
+    leg('c_a_gap', 'c', 'a', '2027-05-02T16:00', '2027-05-02T18:00'),
+  ];
+  const model = derivePlacesTravelDays(linearItinerary(events));
+  const entry = model.days['2027-05-02'];
+  assert.ok(entry.conflicts.some(conflict => conflict.kind === 'overlap'));
+  assert.ok(entry.conflicts.some(conflict => conflict.kind === 'continuity'));
+  const sorted = [...entry.presence].sort((a, b) => a.startMinute - b.startMinute);
+  for (let index = 1; index < sorted.length; index += 1) assert.ok(sorted[index - 1].endMinute <= sorted[index].startMinute);
+  assert.ok(sorted.some(piece => model.items.get(piece.itemId).kind === 'unknown_transition'));
+});
+
+test('missed and cancelled legs remain historical cues and do not move the physical timeline', () => {
+  const events = [
+    leg('missed_a_b', 'a', 'b', '2027-05-02T10:00', '2027-05-02T12:00', { outcome: 'missed' }),
+    leg('replacement_a_b', 'a', 'b', '2027-05-02T14:00', '2027-05-02T16:00', { outcome: 'completed' }),
+  ];
+  let model = derivePlacesTravelDays(linearItinerary(events));
+  const entry = model.days['2027-05-02'];
+  assert.deepEqual(entry.presence.map(piece => [piece.itemId, piece.startMinute, piece.endMinute]), [
+    ['stay:visit_a', 0, 840], ['travel:replacement_a_b', 840, 960], ['stay:visit_b', 960, 1440],
+  ]);
+  assert.deepEqual(entry.disruptedTravel.map(piece => piece.itemId), ['travel:missed_a_b']);
+  assert.equal(entry.conflicts.length, 0);
+
+  model = derivePlacesTravelDays(linearItinerary([leg('cancelled_a_b', 'a', 'b', '2027-05-02T10:00', '2027-05-02T12:00', { outcome: 'cancelled' })]));
+  assert.deepEqual(model.days['2027-05-02'].presence.map(piece => [piece.itemId, piece.startMinute, piece.endMinute]), [['stay:visit_a', 0, 1440]]);
+  assert.deepEqual(model.days['2027-05-02'].disruptedTravel.map(piece => piece.itemId), ['travel:cancelled_a_b']);
 });
 
 test('shared interval clipping rejects invalid ranges and handles a day boundary', () => {
