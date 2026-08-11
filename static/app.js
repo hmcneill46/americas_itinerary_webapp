@@ -2,6 +2,7 @@ import { loadMapConfig } from './map-config.js?v=map-marker-anchor-1';
 import { buildTripMapModel, routeForDay } from './map-data.js?v=map-marker-anchor-1';
 import { TripMap } from './map-view.js?v=map-marker-anchor-1';
 import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuantity } from './budget.js?v=budget-v5';
+import { deriveBookingAction, groupBookings } from './booking.js?v=booking-v1';
 
 'use strict';
 
@@ -32,6 +33,9 @@ const state = {
   budgetCategoryFilter: '',
   budgetSearch: '',
   costDialogItem: null,
+  bookingStatusFilter: 'actionable',
+  bookingTypeFilter: '',
+  bookingDialogItem: null,
 };
 
 const el = id => document.getElementById(id);
@@ -244,6 +248,8 @@ function renderEverything() {
     renderMap(true);
   } else if (state.activeTab === 'budget') {
     renderBudget();
+  } else if (state.activeTab === 'bookings') {
+    renderBookings();
   } else if (state.activeTab === 'edit') {
     renderEditView();
   }
@@ -257,6 +263,7 @@ function switchTab(tab) {
   if (tab === 'day') { renderDayView(); renderEventDetails(); }
   if (tab === 'map') renderMap(false);
   if (tab === 'budget') renderBudget();
+  if (tab === 'bookings') renderBookings();
   if (tab === 'edit') renderEditView();
 }
 
@@ -784,6 +791,65 @@ function applyBudgetSettings() {
   el('budget-settings-dialog').close(); markDirty('Budget settings changed'); renderBudget();
 }
 
+/* ---------------- Bookings ---------------- */
+function bookingToday() { return formatDateKey(Date.now()); }
+function bookingReference(booking, data) {
+  const visit = getVisit(booking.visit_id, data); const location = getLocation(booking.location_id || visit?.location_id, data);
+  return [location?.name, visit ? `Visit ${visit.order}` : '', booking.date ? humanDate(booking.date, { year: false }) : ''].filter(Boolean).join(' · ') || 'Whole trip';
+}
+function bookingCost(booking, data) {
+  return data.budget.cost_items.find(item => item.id === booking.cost_item_id || item.booking_id === booking.id) || null;
+}
+function bookingGroupTitle(bucket) {
+  return ({ urgent: ['Book now', 'Recommended now or overdue'], before_departure: ['Before departure', 'Resolve before the trip starts'], shortly_before: ['Book shortly before', 'Timing follows the trip date'], later: ['Book later', 'Not due yet or still researching'], on_arrival: ['On arrival', 'Intentionally left local and flexible'], booked: ['Booked', 'Confirmed reservations'], secondary: ['Cancelled / not required', 'Kept for history'] })[bucket];
+}
+function bookingCard({ booking, action }, data) {
+  const cost = bookingCost(booking, data); const currency = cost?.currency; const financial = cost ? `<div class="booking-finance"><span>Expected <strong>${formatMoney(itemExpected(cost, data), currency)}</strong></span><span>Committed <strong>${formatMoney(cost.committed_amount, currency)}</strong></span><span>Paid <strong>${formatMoney(calculateBudget(data).items.find(item => item.id === cost.id)?.paidAmount || '0', currency)}</strong></span></div>` : '';
+  const reasons = action.reasons.length ? action.reasons.slice(0, 2).map(reason => `<span class="booking-reason">${escapeHtml(reason)}</span>`).join('') : '<span class="booking-reason subdued">No timing advice recorded</span>';
+  const actionButton = action.actionable ? `<button class="primary-button small" data-booking-confirm="${escapeHtml(booking.id)}">${booking.lifecycle === 'ready_to_book' ? 'Mark booked' : 'Update'}</button>` : '';
+  const safeUrl = /^https?:\/\//i.test(booking.url || '') ? `<a class="linkish-button" href="${escapeHtml(booking.url)}" target="_blank" rel="noopener noreferrer">Provider ↗</a>` : '';
+  return `<article class="booking-card ${action.bucket}"><div class="booking-card-main"><div class="booking-card-heading"><div><span class="booking-type">${escapeHtml(booking.type)}</span><h3>${escapeHtml(booking.title)}</h3><p>${escapeHtml(bookingReference(booking, data))}</p></div><span class="booking-lifecycle ${escapeHtml(booking.lifecycle)}">${escapeHtml(booking.lifecycle.replaceAll('_', ' '))}</span></div><div class="booking-timing"><strong>${escapeHtml(action.timingLabel)}</strong><div>${reasons}</div></div>${financial}</div><div class="booking-card-actions">${actionButton}<button class="secondary-button small" data-edit-booking="${escapeHtml(booking.id)}">Details</button>${safeUrl}</div></article>`;
+}
+function renderBookings() {
+  const data = currentData(); if (!data) return;
+  const today = bookingToday(); const groups = groupBookings(data.bookings, data, today);
+  const types = [...new Set(data.bookings.map(booking => booking.type))].sort();
+  const filtered = groups.filter(({ booking, action }) => (!state.bookingStatusFilter || (state.bookingStatusFilter === 'actionable' ? action.actionable : booking.lifecycle === state.bookingStatusFilter)) && (!state.bookingTypeFilter || booking.type === state.bookingTypeFilter));
+  const order = ['urgent', 'before_departure', 'shortly_before', 'later', 'on_arrival', 'booked', 'secondary'];
+  const sections = order.map(bucket => {
+    const entries = filtered.filter(entry => entry.action.bucket === bucket); if (!entries.length) return '';
+    const [title, note] = bookingGroupTitle(bucket);
+    return `<section class="booking-section ${bucket}"><div class="booking-section-heading"><div><h2>${title}</h2><p>${note}</p></div><span>${entries.length}</span></div><div class="booking-list">${entries.map(entry => bookingCard(entry, data)).join('')}</div></section>`;
+  }).join('') || '<div class="budget-empty">No bookings match this view. Add a booking when there is something to research or reserve.</div>';
+  el('booking-today-note').textContent = `Action dates calculated for ${humanDate(today)}`;
+  el('bookings-content').innerHTML = `<section class="booking-intro"><div><h2>What needs attention?</h2><p>Timing is based on the itinerary and stored research advice—not a manual priority score.</p></div><div class="booking-filters"><select id="booking-status-filter" aria-label="Booking status"><option value="actionable">Actionable first</option><option value="">All lifecycle states</option><option value="not_researched">Not researched</option><option value="researching">Researching</option><option value="ready_to_book">Ready to book</option><option value="booked">Booked</option><option value="cancelled">Cancelled</option><option value="not_required">Not required</option></select><select id="booking-type-filter" aria-label="Booking type"><option value="">All booking types</option>${types.map(type => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join('')}</select></div></section>${sections}`;
+  el('booking-status-filter').value = state.bookingStatusFilter; el('booking-type-filter').value = state.bookingTypeFilter;
+  el('booking-status-filter').addEventListener('change', event => { state.bookingStatusFilter = event.target.value; renderBookings(); });
+  el('booking-type-filter').addEventListener('change', event => { state.bookingTypeFilter = event.target.value; renderBookings(); });
+  document.querySelectorAll('[data-edit-booking]').forEach(button => button.addEventListener('click', () => openBookingDialog(data.bookings.find(item => item.id === button.dataset.editBooking))));
+  document.querySelectorAll('[data-booking-confirm]').forEach(button => button.addEventListener('click', () => openBookingDialog(data.bookings.find(item => item.id === button.dataset.bookingConfirm), true)));
+}
+function defaultBooking(data) { return { id: '', title: '', type: 'Other', lifecycle: 'not_researched', timing: { strategy: 'unknown', recommended_date: '', lead_days: 0, anchor: 'event_start', hard_deadline: '', sell_out_risk: 'unknown', price_rise_risk: 'unknown', flexibility_value: 'unknown', rationale: '', confidence: 'unknown', last_researched_date: '', source_urls: [] }, date: '', time: '', duration: '', booking_deadline: '', details: '', provider: '', reference: '', url: '', notes: '', event_id: '', visit_id: '', location_id: '', cost_item_id: '', legacy: {} }; }
+function openBookingDialog(existing = null, markBooked = false) {
+  const data = currentData(); const booking = state.bookingDialogItem = deepClone(existing || defaultBooking(data)); const timing = booking.timing;
+  el('booking-dialog-title').textContent = markBooked ? 'Confirm booking' : existing ? 'Edit booking' : 'Add booking';
+  for (const [id, value] of Object.entries({ 'booking-id': booking.id, 'booking-title': booking.title, 'booking-type': booking.type, 'booking-date': booking.date, 'booking-provider': booking.provider, 'booking-url': booking.url, 'booking-reference': booking.reference, 'booking-notes': booking.notes, 'booking-strategy': timing.strategy, 'booking-recommended-date': timing.recommended_date, 'booking-lead-days': timing.lead_days || '', 'booking-anchor': timing.anchor, 'booking-hard-deadline': timing.hard_deadline, 'booking-sellout-risk': timing.sell_out_risk, 'booking-price-risk': timing.price_rise_risk, 'booking-flexibility': timing.flexibility_value, 'booking-rationale': timing.rationale, 'booking-confidence': timing.confidence, 'booking-researched-date': timing.last_researched_date, 'booking-sources': timing.source_urls.join('\n') })) el(id).value = value;
+  refreshSelectOptions(el('booking-lifecycle'), ['not_researched', 'researching', 'ready_to_book', 'booked', 'cancelled', 'not_required'].map(value => ({ value, label: value.replaceAll('_', ' ') })), markBooked ? 'booked' : booking.lifecycle);
+  el('booking-visit').innerHTML = budgetOptions(sortedVisits(data).map(visit => ({ id: visit.id, label: `Visit ${visit.order} · ${getLocation(visit.location_id, data)?.name || visit.location_id}` })), booking.visit_id);
+  el('booking-event').innerHTML = budgetOptions(sortedEvents(data).map(event => ({ id: event.id, label: event.title })), booking.event_id);
+  el('booking-location').innerHTML = budgetOptions(Object.values(data.locations).map(location => ({ id: location.id, label: `${location.name} · ${location.country}` })), booking.location_id);
+  el('booking-cost').innerHTML = budgetOptions(data.budget.cost_items.map(item => ({ id: item.id, label: `${item.name} · ${formatMoney(itemExpected(item, data), item.currency)}` })), booking.cost_item_id || data.budget.cost_items.find(item => item.booking_id === booking.id)?.id || '');
+  const cost = bookingCost(booking, data); el('booking-committed').value = cost?.committed_amount || ''; el('booking-deposit').value = ''; el('booking-payment-date').value = bookingToday();
+  el('booking-finance-fieldset').hidden = false; el('booking-dialog').showModal();
+}
+function applyBookingDialog() {
+  const data = state.draft; const booking = state.bookingDialogItem; const sourceUrls = el('booking-sources').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  Object.assign(booking, { id: el('booking-id').value || generateId('booking'), title: el('booking-title').value.trim(), type: el('booking-type').value.trim(), lifecycle: el('booking-lifecycle').value, date: el('booking-date').value, provider: el('booking-provider').value.trim(), url: el('booking-url').value.trim(), reference: el('booking-reference').value.trim(), notes: el('booking-notes').value.trim(), visit_id: el('booking-visit').value, event_id: el('booking-event').value, location_id: el('booking-location').value, cost_item_id: el('booking-cost').value, timing: { strategy: el('booking-strategy').value, recommended_date: el('booking-recommended-date').value, lead_days: Number(el('booking-lead-days').value || 0), anchor: el('booking-anchor').value, hard_deadline: el('booking-hard-deadline').value, sell_out_risk: el('booking-sellout-risk').value, price_rise_risk: el('booking-price-risk').value, flexibility_value: el('booking-flexibility').value, rationale: el('booking-rationale').value.trim(), confidence: el('booking-confidence').value, last_researched_date: el('booking-researched-date').value, source_urls: sourceUrls } });
+  const linked = data.budget.cost_items.find(item => item.id === booking.cost_item_id); if (linked) { linked.booking_id = booking.id; const committed = el('booking-committed').value.trim(); if (booking.lifecycle === 'booked' && committed) linked.committed_amount = committed; const deposit = el('booking-deposit').value.trim(); if (deposit) linked.payments.push({ id: generateId('payment'), kind: 'payment', amount: deposit, date: el('booking-payment-date').value, note: 'Recorded while confirming booking.' }); }
+  const index = data.bookings.findIndex(item => item.id === booking.id); if (index < 0) data.bookings.push(booking); else data.bookings[index] = booking;
+  el('booking-dialog').close(); markDirty(`Booking changed: ${booking.title || 'new booking'}`); renderBookings();
+}
+
 /* ---------------- Edit view ---------------- */
 function renderEditView() {
   if (!currentData()) return;
@@ -1271,6 +1337,11 @@ function bindEvents() {
   el('budget-settings-form').addEventListener('submit', event => { event.preventDefault(); applyBudgetSettings(); });
   el('close-budget-settings-dialog').addEventListener('click', () => el('budget-settings-dialog').close());
   el('cancel-budget-settings-button').addEventListener('click', () => el('budget-settings-dialog').close());
+
+  el('add-booking-button').addEventListener('click', () => openBookingDialog());
+  el('close-booking-dialog').addEventListener('click', () => el('booking-dialog').close());
+  el('cancel-booking-button').addEventListener('click', () => el('booking-dialog').close());
+  el('booking-form').addEventListener('submit', event => { event.preventDefault(); applyBookingDialog(); });
 
   el('event-search').addEventListener('input', renderEventEditor);
   el('add-event').addEventListener('click', addEvent);

@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 OLDEST_SUPPORTED_SCHEMA_VERSION = 4
 
 ALLOWED_MODES = {
@@ -320,12 +320,43 @@ class Event(SchemaModel):
         return values
 
 
+class BookingTiming(SchemaModel):
+    """Structured, explainable advice about *when* to act on a booking."""
+
+    strategy: Literal["unknown", "book_now", "before_departure", "lead_time", "on_arrival", "flexible"] = "unknown"
+    recommended_date: str = ""
+    lead_days: int = Field(default=0, ge=0, le=3650)
+    anchor: Literal["event_start", "visit_start", "trip_start"] = "event_start"
+    hard_deadline: str = ""
+    sell_out_risk: Literal["unknown", "low", "medium", "high"] = "unknown"
+    price_rise_risk: Literal["unknown", "low", "medium", "high"] = "unknown"
+    flexibility_value: Literal["unknown", "low", "medium", "high"] = "unknown"
+    rationale: str = ""
+    confidence: Literal["unknown", "low", "medium", "high"] = "unknown"
+    last_researched_date: str = ""
+    source_urls: list[str] = Field(default_factory=list)
+
+    @field_validator("recommended_date", "hard_deadline", "last_researched_date")
+    @classmethod
+    def valid_optional_dates(cls, value: str, info: Any) -> str:
+        return _date_string(value, info.field_name, allow_blank=True)
+
+    @field_validator("source_urls")
+    @classmethod
+    def valid_source_urls(cls, values: list[str]) -> list[str]:
+        for value in values:
+            parsed = urlparse(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("source_urls items must be absolute http(s) URLs")
+        return values
+
+
 class Booking(SchemaModel):
     id: str
     title: str
     type: str
-    status: Literal["planned", "booked", "cancelled"] = "planned"
-    urgency: Literal["", "Low", "Medium", "High"] = ""
+    lifecycle: Literal["not_researched", "researching", "ready_to_book", "booked", "cancelled", "not_required"] = "not_researched"
+    timing: BookingTiming = Field(default_factory=BookingTiming)
     date: str = ""
     time: str = ""
     duration: str = ""
@@ -338,6 +369,7 @@ class Booking(SchemaModel):
     event_id: str = ""
     visit_id: str = ""
     location_id: str = ""
+    cost_item_id: str = ""
     legacy: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("id")
@@ -355,7 +387,7 @@ class Booking(SchemaModel):
     def valid_optional_dates(cls, value: str, info: Any) -> str:
         return _date_string(value, info.field_name, allow_blank=True)
 
-    @field_validator("event_id", "visit_id", "location_id")
+    @field_validator("event_id", "visit_id", "location_id", "cost_item_id")
     @classmethod
     def valid_optional_ids(cls, value: str, info: Any) -> str:
         return value if value == "" else _identifier(value, info.field_name)
@@ -560,6 +592,17 @@ class ItineraryV6(SchemaModel):
     budget: Budget
 
 
+class ItineraryV7(SchemaModel):
+    schema_version: Literal[7]
+    metadata: Metadata
+    locations: dict[str, Location]
+    visits: list[Visit]
+    days: list[Day]
+    events: list[Event]
+    bookings: list[Booking]
+    budget: Budget
+
+
 def _format_pydantic_errors(exc: ValidationError) -> list[str]:
     errors: list[str] = []
     for item in exc.errors(include_url=False):
@@ -607,7 +650,7 @@ def _cost_paid_amount(item: CostItem) -> Decimal:
     return total
 
 
-def _cross_record_errors(model: ItineraryV6) -> list[str]:
+def _cross_record_errors(model: ItineraryV6 | ItineraryV7) -> list[str]:
     errors: list[str] = []
     metadata = model.metadata
     start_date = _parse_date(metadata.start_date)
@@ -750,6 +793,11 @@ def _cross_record_errors(model: ItineraryV6) -> list[str]:
     cost_item_ids = [item.id for item in budget.cost_items]
     errors.extend(_duplicate_errors(cost_item_ids, "cost item"))
     booking_ids = {booking.id for booking in model.bookings}
+    cost_item_id_set = set(cost_item_ids)
+    for index, booking in enumerate(model.bookings):
+        path = f"bookings[{index}]"
+        if booking.cost_item_id and booking.cost_item_id not in cost_item_id_set:
+            errors.append(f"{path}.cost_item_id references unknown cost item {booking.cost_item_id!r}.")
     category_id_set = set(category_ids)
     for index, item in enumerate(budget.cost_items):
         path = f"budget.cost_items[{index}]"
@@ -779,6 +827,8 @@ def _cross_record_errors(model: ItineraryV6) -> list[str]:
                 errors.append(f"{path}.visit_id must match its referenced booking visit.")
             if booking and item.event_id and booking.event_id and item.event_id != booking.event_id:
                 errors.append(f"{path}.event_id must match its referenced booking event.")
+            if booking and booking.cost_item_id and booking.cost_item_id != item.id:
+                errors.append(f"{path}.booking_id does not agree with booking.cost_item_id.")
         if item.expected.quantity_source != "manual" and not item.visit_id:
             errors.append(f"{path}.expected.quantity_source requires visit_id.")
         if item.start_date and not (metadata.start_date <= item.start_date <= metadata.end_date):
@@ -793,7 +843,7 @@ def _cross_record_errors(model: ItineraryV6) -> list[str]:
     return list(dict.fromkeys(errors))
 
 
-def _budget_warnings(model: ItineraryV6) -> list[str]:
+def _budget_warnings(model: ItineraryV6 | ItineraryV7) -> list[str]:
     warnings: list[str] = []
     visit_by_id = {visit.id: visit for visit in model.visits}
     expected_total = Decimal("0")
@@ -815,15 +865,21 @@ def _budget_warnings(model: ItineraryV6) -> list[str]:
             warnings.append(f"Cost item {item.id!r} is in {item.currency} and has no FX rate to {model.budget.base_currency}.")
         if item.booking_id:
             booking = next((booking for booking in model.bookings if booking.id == item.booking_id), None)
-            if booking and booking.status == "booked" and committed == 0:
+            if booking and booking.lifecycle == "booked" and committed == 0:
                 warnings.append(f"Booked booking {item.booking_id!r} has a linked cost item with no committed amount.")
+    cost_by_id = {item.id: item for item in model.budget.cost_items}
+    for booking in model.bookings:
+        if booking.lifecycle == "booked" and booking.cost_item_id:
+            linked_cost = cost_by_id.get(booking.cost_item_id)
+            if linked_cost and Decimal(linked_cost.committed_amount) == 0:
+                warnings.append(f"Booked booking {booking.id!r} has a linked cost item with no committed amount.")
     if all_expected_have_fx and expected_total > Decimal(model.budget.total_budget):
         warnings.append("Expected trip cost exceeds the total trip budget.")
     return list(dict.fromkeys(warnings))
 
 
 def validate_current_itinerary(data: Any) -> dict[str, list[str]]:
-    """Validate canonical schema v6 without mutating or normalising the supplied document."""
+    """Validate canonical schema v7 without mutating or normalising the supplied document."""
 
     if not isinstance(data, dict):
         return {"errors": ["The itinerary must be a JSON object."], "warnings": []}
@@ -832,7 +888,7 @@ def validate_current_itinerary(data: Any) -> dict[str, list[str]]:
     except (TypeError, ValueError) as exc:
         return {"errors": [f"The itinerary must contain only standard JSON values: {exc}"], "warnings": []}
     try:
-        model = ItineraryV6.model_validate(data)
+        model = ItineraryV7.model_validate(data)
     except ValidationError as exc:
         return {"errors": _format_pydantic_errors(exc), "warnings": []}
     errors = _cross_record_errors(model)
@@ -962,7 +1018,45 @@ def migrate_v5_to_v6(data: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-MIGRATIONS = {4: migrate_v4_to_v5, 5: migrate_v5_to_v6}
+def migrate_v6_to_v7(data: dict[str, Any]) -> dict[str, Any]:
+    """Add neutral booking lifecycle/timing fields without inventing travel advice."""
+
+    migrated = copy.deepcopy(data)
+    bookings = migrated.get("bookings")
+    if not isinstance(bookings, list):
+        raise MigrationError("bookings must be an array in schema version 6")
+    lifecycle_by_status = {"planned": "ready_to_book", "booked": "booked", "cancelled": "cancelled"}
+    cost_items = migrated.get("budget", {}).get("cost_items", []) if isinstance(migrated.get("budget"), dict) else []
+    cost_by_booking = {
+        item.get("booking_id"): item.get("id")
+        for item in cost_items
+        if isinstance(item, dict) and isinstance(item.get("booking_id"), str) and isinstance(item.get("id"), str)
+    }
+    for index, booking in enumerate(bookings):
+        if not isinstance(booking, dict):
+            raise MigrationError(f"bookings[{index}] must be an object in schema version 6")
+        old_status = booking.get("status", "planned")
+        booking["lifecycle"] = lifecycle_by_status.get(old_status, "not_researched")
+        booking["timing"] = {
+            "strategy": "unknown",
+            "recommended_date": "",
+            "lead_days": 0,
+            "anchor": "event_start",
+            "hard_deadline": booking.get("booking_deadline", "") if isinstance(booking.get("booking_deadline", ""), str) else "",
+            "sell_out_risk": "unknown",
+            "price_rise_risk": "unknown",
+            "flexibility_value": "unknown",
+            "rationale": "",
+            "confidence": "unknown",
+            "last_researched_date": "",
+            "source_urls": [],
+        }
+        booking["cost_item_id"] = cost_by_booking.get(booking.get("id"), "")
+    migrated["schema_version"] = 7
+    return migrated
+
+
+MIGRATIONS = {4: migrate_v4_to_v5, 5: migrate_v5_to_v6, 6: migrate_v6_to_v7}
 
 
 def migrate_to_current(data: Any) -> tuple[dict[str, Any], list[str], int]:

@@ -16,7 +16,7 @@ test('canonical itinerary becomes ordered visits and schematic event routes', ()
   assert.ok(model.routes.every(route => route.geometryKind === 'schematic'));
   assert.ok(model.routes.every(route => route.geometry.type === 'LineString'));
   assert.deepEqual(model.routes[0].geometry.coordinates, [model.visits[0].coordinates, model.visits[1].coordinates]);
-  assert.equal(model.visits[1].bookingCount, 3);
+  assert.equal(model.visits[1].bookingCount, 4);
   assert.deepEqual(model.visits[1].accommodation, ['Paris accommodation']);
   assert.equal(routeForDay(model, example, example.days[1]).eventId, 'evt_train_london_paris');
 });

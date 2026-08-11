@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "metadata": {
     "title": "European Rail Weekend",
     "description": "Public demo data showing a short multi-country trip with local times, route changes and bookings.",
@@ -313,8 +313,8 @@
       "id": "booking_train_london_paris",
       "title": "London to Paris rail ticket",
       "type": "Transport",
-      "status": "booked",
-      "urgency": "High",
+      "lifecycle": "booked",
+      "timing": {"strategy": "lead_time", "recommended_date": "", "lead_days": 45, "anchor": "event_start", "hard_deadline": "", "sell_out_risk": "medium", "price_rise_risk": "high", "flexibility_value": "medium", "rationale": "Rail fares normally rise nearer departure.", "confidence": "high", "last_researched_date": "2027-01-12", "source_urls": ["https://example.com/rail-advice"]},
       "date": "2027-04-09",
       "time": "08:30",
       "duration": "About 2 hours 30 minutes",
@@ -327,14 +327,15 @@
       "event_id": "evt_train_london_paris",
       "visit_id": "paris_01",
       "location_id": "paris",
+      "cost_item_id": "cost_rail_london_paris",
       "legacy": {}
     },
     {
       "id": "booking_paris_stay",
       "title": "Paris accommodation",
       "type": "Accommodation",
-      "status": "booked",
-      "urgency": "Medium",
+      "lifecycle": "booked",
+      "timing": {"strategy": "before_departure", "recommended_date": "", "lead_days": 0, "anchor": "trip_start", "hard_deadline": "", "sell_out_risk": "medium", "price_rise_risk": "medium", "flexibility_value": "low", "rationale": "A confirmed room keeps the first stop straightforward.", "confidence": "high", "last_researched_date": "2027-01-15", "source_urls": []},
       "date": "2027-04-09",
       "time": "15:00 check-in",
       "duration": "2 nights",
@@ -347,14 +348,15 @@
       "event_id": "evt_paris_checkin",
       "visit_id": "paris_01",
       "location_id": "paris",
+      "cost_item_id": "cost_paris_accommodation",
       "legacy": {}
     },
     {
       "id": "booking_paris_museum",
       "title": "Museum timed entry",
       "type": "Activity",
-      "status": "planned",
-      "urgency": "Low",
+      "lifecycle": "ready_to_book",
+      "timing": {"strategy": "book_now", "recommended_date": "", "lead_days": 0, "anchor": "event_start", "hard_deadline": "", "sell_out_risk": "high", "price_rise_risk": "low", "flexibility_value": "low", "rationale": "Timed entries have limited capacity on popular dates.", "confidence": "medium", "last_researched_date": "2027-01-20", "source_urls": ["https://example.com/museum-advice"]},
       "date": "2027-04-10",
       "time": "10:00",
       "duration": "2 hours 30 minutes",
@@ -367,7 +369,40 @@
       "event_id": "evt_paris_museum",
       "visit_id": "paris_01",
       "location_id": "paris",
+      "cost_item_id": "cost_paris_museum",
       "legacy": {}
+    },
+    {
+      "id": "booking_airport_transfer",
+      "title": "Airport transfer home",
+      "type": "Car / Transfer",
+      "lifecycle": "researching",
+      "timing": {"strategy": "before_departure", "recommended_date": "", "lead_days": 0, "anchor": "trip_start", "hard_deadline": "", "sell_out_risk": "low", "price_rise_risk": "medium", "flexibility_value": "medium", "rationale": "Compare options before leaving, but no need to commit months ahead.", "confidence": "medium", "last_researched_date": "2027-01-20", "source_urls": []},
+      "date": "2027-04-08", "time": "", "duration": "", "booking_deadline": "", "details": "Example only.", "provider": "", "reference": "", "url": "", "notes": "", "event_id": "", "visit_id": "", "location_id": "london", "cost_item_id": "", "legacy": {}
+    },
+    {
+      "id": "booking_canal_activity",
+      "title": "Weather-sensitive canal activity",
+      "type": "Activity / Attraction",
+      "lifecycle": "ready_to_book",
+      "timing": {"strategy": "lead_time", "recommended_date": "", "lead_days": 1, "anchor": "event_start", "hard_deadline": "", "sell_out_risk": "low", "price_rise_risk": "low", "flexibility_value": "high", "rationale": "Weather matters more than an early reservation.", "confidence": "high", "last_researched_date": "2027-01-20", "source_urls": []},
+      "date": "2027-04-12", "time": "", "duration": "", "booking_deadline": "", "details": "", "provider": "", "reference": "", "url": "", "notes": "", "event_id": "evt_canal_walk", "visit_id": "amsterdam_01", "location_id": "amsterdam", "cost_item_id": "", "legacy": {}
+    },
+    {
+      "id": "booking_local_walking_tour",
+      "title": "Neighbourhood walking tour",
+      "type": "Tour",
+      "lifecycle": "not_researched",
+      "timing": {"strategy": "on_arrival", "recommended_date": "", "lead_days": 0, "anchor": "visit_start", "hard_deadline": "", "sell_out_risk": "low", "price_rise_risk": "low", "flexibility_value": "high", "rationale": "Choose after arriving and checking the local weather.", "confidence": "medium", "last_researched_date": "", "source_urls": []},
+      "date": "", "time": "", "duration": "", "booking_deadline": "", "details": "", "provider": "", "reference": "", "url": "", "notes": "", "event_id": "", "visit_id": "paris_01", "location_id": "paris", "cost_item_id": "", "legacy": {}
+    },
+    {
+      "id": "booking_cancelled_ferry",
+      "title": "Cancelled example ferry option",
+      "type": "Ferry",
+      "lifecycle": "cancelled",
+      "timing": {"strategy": "flexible", "recommended_date": "", "lead_days": 0, "anchor": "trip_start", "hard_deadline": "", "sell_out_risk": "unknown", "price_rise_risk": "unknown", "flexibility_value": "medium", "rationale": "Alternative route no longer needed.", "confidence": "low", "last_researched_date": "", "source_urls": []},
+      "date": "", "time": "", "duration": "", "booking_deadline": "", "details": "", "provider": "", "reference": "", "url": "", "notes": "History is retained deliberately.", "event_id": "", "visit_id": "", "location_id": "", "cost_item_id": "", "legacy": {}
     }
   ],
   "budget": {

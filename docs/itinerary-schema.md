@@ -1,6 +1,6 @@
-# Itinerary JSON schema (version 6)
+# Itinerary JSON schema (version 7)
 
-Version 6 is the canonical portable format used by Trip Planner. A document is UTF-8 JSON with a single root object. It is intended to be readable and editable by people and generative AI tools.
+Version 7 is the canonical portable format used by Trip Planner. A document is UTF-8 JSON with a single root object. It is intended to be readable and editable by people and generative AI tools.
 
 Do not add comments to JSON. Do not use `null` for defined fields: omit an optional field or use its documented empty value. Unknown extension fields are retained, but consumers should prefer the documented fields.
 
@@ -10,7 +10,7 @@ All root fields are required, even when an array is empty.
 
 ```json
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "metadata": {},
   "locations": {},
   "visits": [],
@@ -21,7 +21,7 @@ All root fields are required, even when an array is empty.
 }
 ```
 
-- `schema_version` must be the integer `6`.
+- `schema_version` must be the integer `7`.
 - `locations` is an object keyed by location ID. All other collections are arrays.
 - `visits` and `days` must be non-empty. `events`, `bookings`, and `budget.cost_items` may be empty.
 
@@ -42,7 +42,7 @@ Required fields:
 - `category_colours`: object mapping category names to strict six-digit hex colours such as `"#E58C47"`.
 - `map_bounds`: numeric `min_lon`, `max_lon`, `min_lat`, `max_lat`. Longitude is in `[-180, 180]`, latitude in `[-90, 90]`, minima must be less than maxima, and every location must be inside the bounds.
 
-The interactive map currently fits its camera from visit coordinates rather than using `map_bounds`. The validated bounds remain part of schema v6 for portability, compatibility and other consumers; keep them large enough to contain every location.
+The interactive map currently fits its camera from visit coordinates rather than using `map_bounds`. The validated bounds remain part of schema v7 for portability, compatibility and other consumers; keep them large enough to contain every location.
 
 Optional string fields default to `""`: `description`, `time_model_note`, `created_from`, and `default_currency`. A non-empty `default_currency` is a three-letter uppercase code such as `EUR`; it is only a trip-level hint, not a budgeting model.
 
@@ -156,27 +156,36 @@ Timestamps use `YYYY-MM-DDTHH:MM` (optional seconds are accepted) with no `Z` an
 
 ## Bookings
 
-Version 5 bookings are named objects, never positional arrays. This is a modest foundation rather than the future full booking or budget model.
+Bookings are first-class action planning records. Lifecycle says what has happened; `timing` says when to act and why. Do not use a manual numeric urgency score.
 
-Required: stable `id`, non-blank `title`, and non-blank free-text `type` (for example `Transport`, `Accommodation`, or `Activity`).
+Required: stable `id`, non-blank `title`, non-blank free-text `type` (such as `Accommodation`, `Flight`, `Tour`, or a custom type), `lifecycle`, and `timing`.
 
-Optional fields and empty defaults:
-
-- `status`: `planned` (default), `booked`, or `cancelled`.
-- `urgency`: `""`, `Low`, `Medium`, or `High`.
-- `date`, `booking_deadline`: blank or `YYYY-MM-DD`.
-- `time`, `duration`, `details`, `provider`, `reference`, `notes`: strings.
-- `url`: blank or an absolute `http`/`https` URL.
-- `event_id`, `visit_id`, `location_id`: blank or valid references. A booking with both visit and location references must use the visit's location.
-- `legacy`: object reserved for exact source values retained by migrations; normally `{}` in new data.
+- `lifecycle` is one of `not_researched`, `researching`, `ready_to_book`, `booked`, `cancelled`, or `not_required`.
+- `event_id`, `visit_id`, `location_id`, and `cost_item_id` are blank or valid stable references. Visit/location references must agree. A cost link makes Budget the canonical source for expected, committed, and paid money.
+- `date`, `booking_deadline`, `time`, `duration`, `details`, `provider`, `reference`, `notes` are optional retained practical fields. `url` is blank or an absolute `http`/`https` URL. Never store card details, passwords, or credentials.
+- `timing.strategy` is `unknown`, `book_now`, `before_departure`, `lead_time`, `on_arrival`, or `flexible`. Use `recommended_date` for a fixed soft recommendation, or `lead_days` plus `anchor` (`event_start`, `visit_start`, or `trip_start`) for a date that moves with the itinerary. `hard_deadline` is a distinct provider deadline.
+- Risk/value and advice fields use `unknown`, `low`, `medium`, or `high`: `sell_out_risk`, `price_rise_risk`, `flexibility_value`, and `confidence`. `rationale`, `last_researched_date`, and safe `source_urls` explain the advice.
 
 ```json
 {
   "id": "booking_paris_stay",
   "title": "Paris accommodation",
   "type": "Accommodation",
-  "status": "booked",
-  "urgency": "Medium",
+  "lifecycle": "ready_to_book",
+  "timing": {
+    "strategy": "lead_time",
+    "recommended_date": "",
+    "lead_days": 30,
+    "anchor": "event_start",
+    "hard_deadline": "",
+    "sell_out_risk": "high",
+    "price_rise_risk": "low",
+    "flexibility_value": "low",
+    "rationale": "Limited capacity and fixed trek dates.",
+    "confidence": "high",
+    "last_researched_date": "2027-01-20",
+    "source_urls": ["https://example.com/trek-advice"]
+  },
   "date": "2027-04-09",
   "booking_deadline": "2027-02-15",
   "provider": "Example Hotel",
@@ -184,15 +193,16 @@ Optional fields and empty defaults:
   "event_id": "evt_paris_checkin",
   "visit_id": "paris_01",
   "location_id": "paris",
+  "cost_item_id": "cost_paris_accommodation",
   "legacy": {}
 }
 ```
 
-Bookings deliberately remain separate from money. A `budget.cost_items[]` entry can reference a booking by its stable `booking_id`, but a booked status never invents a financial amount.
+Booking lifecycle never invents money. `cost_item_id` and the reciprocal `budget.cost_items[].booking_id` may connect a reservation to money, but marking booked does not create a payment. A partial payment/deposit remains a Budget payment record; cancellation preserves it so refunds or lost money remain understandable.
 
 ## Budget and money
 
-`budget` is required in schema v6. It is the only canonical place for trip financial data; do not add ad-hoc prices to events or bookings.
+`budget` is required in schema v7. It is the only canonical place for trip financial data; do not add ad-hoc prices to events or bookings.
 
 ```json
 "budget": {
@@ -268,11 +278,13 @@ Payments belong inside their cost item and are all in that item's native currenc
 
 ## Versioning and migration
 
-The application currently accepts versions 4, 5, and 6. Validation and import first make a deep copy, apply every migration in sequence, then run normal v6 validation. Migration never mutates the supplied object.
+The application currently accepts versions 4, 5, 6, and 7. Validation and import first make a deep copy, apply every migration in sequence, then run normal v7 validation. Migration never mutates the supplied object.
 
 For v4, each positional booking row becomes a v5 booking object with a deterministic ID. The old positions map to `date`, `type`, `title`, `time`, `duration`, `booking_deadline`, status input, `details`, `urgency`, `notes`, and `reference`. The complete original row is also retained under `legacy.positional_values`, so ambiguous or extra values are not lost. The subsequent v5→v6 migration adds a deterministic empty budget: default categories, base currency from `metadata.default_currency` (or `USD` when blank), and no inferred cost items. It never guesses prices from bookings.
 
-`GET /api/itinerary` may return an old saved file as migrated v6 data plus a `migrations` list. The original file is not rewritten merely by loading. `POST /api/validate` returns the migrated canonical document in `itinerary`; browser upload places that document only in the draft. A revision-protected save persists v6.
+The v6→v7 migration maps the former lifecycle (`planned`, `booked`, `cancelled`) to `ready_to_book`, `booked`, or `cancelled`, adds neutral unknown timing advice, carries forward the old booking deadline as a hard deadline, and fills the reciprocal cost link when it is already unambiguous. It does not claim research, risk, or timing advice that was not present.
+
+`GET /api/itinerary` may return an old saved file as migrated v7 data plus a `migrations` list. The original file is not rewritten merely by loading. `POST /api/validate` returns the migrated canonical document in `itinerary`; browser upload places that document only in the draft. A revision-protected save persists v7.
 
 Files newer than the supported version, older than v4, or unable to migrate safely are rejected. Applying migration to v5 again makes no changes.
 

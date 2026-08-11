@@ -70,7 +70,7 @@ def test_example_is_canonical_current_schema_and_validates():
     assert data["schema_version"] == CURRENT_SCHEMA_VERSION
     assert result == {"errors": [], "warnings": []}
     assert len(data["days"]) == 5
-    assert {booking["type"] for booking in data["bookings"]} == {"Transport", "Accommodation", "Activity"}
+    assert {booking["lifecycle"] for booking in data["bookings"]} >= {"ready_to_book", "booked", "cancelled", "not_researched"}
     assert any(event["start"] == "2027-04-11T15:00" and event["end"] == "2027-04-12T09:00" for event in data["events"])
 
 
@@ -84,10 +84,10 @@ def test_v4_booking_migration_is_deterministic_lossless_and_idempotent():
 
     assert legacy == untouched
     assert source_version == 4
-    assert applied == ["v4->v5", "v5->v6"]
+    assert applied == ["v4->v5", "v5->v6", "v6->v7"]
     assert second_applied == []
     assert first == second == repeated
-    assert first["schema_version"] == 6
+    assert first["schema_version"] == 7
     assert first["budget"]["cost_items"] == []
     assert first["budget"]["base_currency"] == "GBP"
     assert first["legacy_root_extension"] == {"keep": True}
@@ -99,6 +99,8 @@ def test_v4_booking_migration_is_deterministic_lossless_and_idempotent():
     assert booking["date"] == "2027-04-09"
     assert booking["booking_deadline"] == "2027-03-01"
     assert booking["legacy"]["positional_values"] == row
+    assert booking["lifecycle"] == "booked"
+    assert booking["timing"]["strategy"] == "unknown"
     assert validate_current_itinerary(first)["errors"] == []
 
 
@@ -112,7 +114,7 @@ def test_v5_budget_migration_is_deterministic_and_preserves_existing_content():
     repeated, repeated_applied, _ = migrate_to_current(migrated)
 
     assert source_version == 5
-    assert applied == ["v5->v6"]
+    assert applied == ["v5->v6", "v6->v7"]
     assert repeated_applied == []
     assert migrated == repeated
     assert migrated["budget"]["base_currency"] == "GBP"
@@ -122,14 +124,35 @@ def test_v5_budget_migration_is_deterministic_and_preserves_existing_content():
     assert budget["cost_items"]  # The v5 input had no financial interpretation to infer.
 
 
+def test_v6_booking_migration_is_conservative_and_links_existing_costs():
+    legacy = load_example()
+    legacy["schema_version"] = 6
+    for booking in legacy["bookings"]:
+        booking["status"] = {"ready_to_book": "planned", "booked": "booked", "cancelled": "cancelled"}.get(booking["lifecycle"], "planned")
+        booking.pop("lifecycle", None)
+        booking.pop("timing", None)
+        booking.pop("cost_item_id", None)
+    migrated, applied, source_version = migrate_to_current(legacy)
+    repeated, repeated_applied, _ = migrate_to_current(migrated)
+    assert source_version == 6
+    assert applied == ["v6->v7"]
+    assert repeated_applied == []
+    assert migrated == repeated
+    rail = next(booking for booking in migrated["bookings"] if booking["id"] == "booking_train_london_paris")
+    assert rail["lifecycle"] == "booked"
+    assert rail["timing"]["strategy"] == "unknown"
+    assert rail["cost_item_id"] == "cost_rail_london_paris"
+    assert validate_current_itinerary(migrated)["errors"] == []
+
+
 def test_validate_endpoint_returns_migrated_document():
     legacy, _ = legacy_v4_itinerary()
     response = TestClient(itinerary_app.app).post("/api/validate", json={"itinerary": legacy})
     body = response.json()
     assert response.status_code == 200
     assert body["valid"] is True
-    assert body["migrations"] == ["v4->v5", "v5->v6"]
-    assert body["itinerary"]["schema_version"] == 6
+    assert body["migrations"] == ["v4->v5", "v5->v6", "v6->v7"]
+    assert body["itinerary"]["schema_version"] == 7
     assert isinstance(body["itinerary"]["bookings"][0], dict)
 
 
@@ -142,8 +165,8 @@ def test_get_migrates_legacy_file_in_memory_without_rewriting(tmp_path, monkeypa
     body = response.json()
 
     assert response.status_code == 200
-    assert body["migrations"] == ["v4->v5", "v5->v6"]
-    assert body["itinerary"]["schema_version"] == 6
+    assert body["migrations"] == ["v4->v5", "v5->v6", "v6->v7"]
+    assert body["itinerary"]["schema_version"] == 7
     assert target.read_bytes() == original_bytes
 
 
@@ -289,8 +312,8 @@ def test_structured_booking_fields_and_references_are_validated():
     assert itinerary_app.validate_itinerary(data)["errors"] == []
 
     data = load_example()
-    data["bookings"][0]["status"] = "maybe"
-    assert_invalid(data, "bookings.0.status")
+    data["bookings"][0]["lifecycle"] = "maybe"
+    assert_invalid(data, "bookings.0.lifecycle")
 
     data = load_example()
     data["bookings"][0]["provider"] = None
@@ -299,6 +322,31 @@ def test_structured_booking_fields_and_references_are_validated():
     data = load_example()
     data["bookings"][0]["url"] = "javascript:alert(1)"
     assert_invalid(data, "absolute http(s) URL")
+
+    data = load_example()
+    data["bookings"][0]["timing"]["source_urls"] = ["javascript:alert(1)"]
+    assert_invalid(data, "source_urls")
+
+    data = load_example()
+    data["bookings"][0]["cost_item_id"] = "missing_cost"
+    assert_invalid(data, "unknown cost item")
+
+    data = load_example()
+    data["bookings"][0]["timing"]["lead_days"] = -1
+    assert_invalid(data, "lead_days")
+
+    data = load_example()
+    data["bookings"][0]["cost_item_id"] = "cost_paris_museum"
+    data["budget"]["cost_items"][3]["booking_id"] = "booking_paris_museum"
+    assert_invalid(data, "does not agree with booking.cost_item_id")
+
+    data = load_example()
+    data["bookings"][0]["cost_item_id"] = "cost_rail_london_paris"
+    data["budget"]["cost_items"][0]["booking_id"] = "booking_train_london_paris"
+    data["budget"]["cost_items"][0]["committed_amount"] = "0"
+    result = itinerary_app.validate_itinerary(data)
+    assert result["errors"] == []
+    assert any("linked cost item with no committed" in warning for warning in result["warnings"])
 
 
 def test_budget_validation_references_money_and_warnings():
@@ -409,7 +457,7 @@ def test_save_creates_exact_backup_and_rotates_after_success(tmp_path, monkeypat
     backups = list(backup_dir.glob("itinerary_*.json"))
     assert len(backups) == 3
     assert json.loads(target.read_text(encoding="utf-8"))["metadata"]["description"] == "Save 4"
-    assert all(json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 6 for path in backups)
+    assert all(json.loads(path.read_text(encoding="utf-8"))["schema_version"] == CURRENT_SCHEMA_VERSION for path in backups)
 
 
 def test_legacy_save_persists_current_schema_and_keeps_backup(tmp_path, monkeypatch):
@@ -426,7 +474,7 @@ def test_legacy_save_persists_current_schema_and_keeps_backup(tmp_path, monkeypa
 
     assert response.status_code == 200
     saved = json.loads(target.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 6
+    assert saved["schema_version"] == CURRENT_SCHEMA_VERSION
     assert saved["bookings"][0]["legacy"]["positional_values"] == row
     backups = list(backup_dir.glob("itinerary_*.json"))
     assert len(backups) == 1

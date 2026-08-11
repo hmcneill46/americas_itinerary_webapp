@@ -42,7 +42,7 @@ python tools/validate_itinerary.py data/itinerary.example.json
 
 ## JSON portability and time model
 
-The documented current format is schema v6: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable IDs, named booking objects, first-class budget items, typed fields and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
+The documented current format is schema v7: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable IDs, structured booking lifecycle/timing advice, first-class budget items, typed fields and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
 
 Events use floating local wall-clock timestamps. `2027-04-09T08:30` means 08:30 at that point in the trip; it has no `Z` or UTC offset and is not converted through the browser timezone. Events can last exact minutes or span several days.
 
@@ -53,6 +53,7 @@ Download/upload supports an AI-assisted workflow: download JSON, edit it with a 
 - **Day bars** render exact-minute event segments, overlaps, multi-day clipping, search and category filters.
 - **Map** uses a locally served, pinned MapLibre GL JS runtime with an OpenFreeMap Positron vector basemap. It shows ordered visit markers, repeated visits, secondary event locations and tappable dashed route connections. Map selections can open the relevant day or event, while explicit focus actions leave ordinary manual exploration alone.
 - **Budget** keeps exact-decimal native-currency cost items, stored FX snapshots, expected/committed/paid totals, deposits/refunds, category and visit breakdowns, plus a responsive cost editor and quick-expense flow. No live currency service is used; an item without an FX snapshot is visibly excluded from complete base-currency totals.
+- **Bookings** is an action-first view: lifecycle, explainable timing strategy, moving lead-time recommendations, hard deadlines, risk/flexibility rationale and optional Budget links. It does not scrape providers or claim live availability.
 - **Edit** supports events, locations, visit duration/order, day information and route date reflow.
 
 Route reflow shifts a complete visit, its days and its events while retaining floating-local times.
