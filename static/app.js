@@ -3,6 +3,7 @@ import { buildTripMapModel, routeForDay } from './map-data.js?v=map-marker-ancho
 import { TripMap } from './map-view.js?v=map-marker-anchor-1';
 import { calculateBudget, decimalCompare, formatMoney, itemExpected, visitQuantity } from './budget.js?v=budget-v5';
 import { deriveBookingAction, groupBookings } from './booking.js?v=booking-v1';
+import { semanticDiff } from './import-diff.js?v=import-v1';
 
 'use strict';
 
@@ -36,6 +37,7 @@ const state = {
   bookingStatusFilter: 'actionable',
   bookingTypeFilter: '',
   bookingDialogItem: null,
+  importPreview: null,
 };
 
 const el = id => document.getElementById(id);
@@ -250,6 +252,8 @@ function renderEverything() {
     renderBudget();
   } else if (state.activeTab === 'bookings') {
     renderBookings();
+  } else if (state.activeTab === 'handoff') {
+    renderHandoff();
   } else if (state.activeTab === 'edit') {
     renderEditView();
   }
@@ -264,6 +268,7 @@ function switchTab(tab) {
   if (tab === 'map') renderMap(false);
   if (tab === 'budget') renderBudget();
   if (tab === 'bookings') renderBookings();
+  if (tab === 'handoff') renderHandoff();
   if (tab === 'edit') renderEditView();
 }
 
@@ -1265,28 +1270,28 @@ function downloadDraft() {
   URL.revokeObjectURL(url);
 }
 
+/* ---------------- AI handoff / safe import ---------------- */
+const AI_HANDOFF_TEXT = `You are modifying a Trip Planner itinerary JSON document. Return one complete valid JSON document only (not a patch or Markdown). Preserve schema_version and stable IDs whenever an entity is modified. Keep event timestamps as floating local YYYY-MM-DDTHH:MM values with no Z or UTC offset. Keep exact money and FX values as decimal strings. Preserve expected, committed and paid as distinct Budget concepts; booking lifecycle and booking timing are distinct. Do not add secrets, card data, or javascript: URLs.`;
+function renderHandoff() {
+  const data=currentData(); const summary=calculateBudget(data); const dirty=state.dirty ? 'Current draft has unsaved changes.' : 'Current draft matches the saved trip.';
+  el('handoff-content').innerHTML=`<section class="handoff-hero"><div><h2>AI import & export</h2><p>Trip Planner JSON is the safe interchange format. Importing validates and previews changes before it touches your draft.</p></div><span class="booking-reason">${escapeHtml(dirty)}</span></section><section class="handoff-grid"><article class="budget-section"><h2>Export for planning help</h2><p>Download the precise version you intend to share.</p><div class="handoff-actions"><a class="secondary-button link-button" href="/api/download" download="itinerary.json">Download saved trip</a><button id="handoff-download-draft" class="secondary-button">Export current draft</button><button id="copy-ai-instructions" class="primary-button">Copy AI instructions</button></div></article><article class="budget-section"><h2>Import an updated trip</h2><p>JSON is migrated and validated on this home server, then compared with the current draft. It is never saved automatically.</p><label class="upload-button primary-button">Choose JSON to preview<input id="handoff-import-input" type="file" accept="application/json,.json"></label><small class="handoff-meta">${data.metadata.title} · ${data.visits.length} visits · ${data.events.length} events · ${data.bookings.length} bookings · expected ${escapeHtml(formatMoney(summary.totals.expected,summary.baseCurrency))}</small></article></section>`;
+  el('handoff-download-draft').addEventListener('click', downloadDraft); el('copy-ai-instructions').addEventListener('click', async()=>{ try { await navigator.clipboard.writeText(AI_HANDOFF_TEXT); toast('AI instructions copied.', 'success'); } catch { toast('Copy is unavailable in this browser. Use the instructions shown in the AI handoff guide.', 'error'); } }); el('handoff-import-input').addEventListener('change',event=>previewImport(event.target.files[0]));
+}
+function importChangeRow(item) { return `<article class="import-change ${escapeHtml(item.importance)}"><span class="import-kind">${escapeHtml(item.kind)}</span><div><strong>${escapeHtml(item.label)}</strong>${item.before||item.after?`<p>${escapeHtml(item.before||'—')} <b>→</b> ${escapeHtml(item.after||'—')}</p>`:''}</div></article>`; }
+function showImportPreview(prepared, filename) {
+  const diff=semanticDiff(currentData(),prepared.itinerary); state.importPreview={itinerary:prepared.itinerary,diff,filename}; const groups=[['overview','Overview'],['schedule','Schedule'],['bookings','Bookings'],['budget','Budget'],['places','Places']].filter(([key])=>diff.grouped[key]?.length);
+  const body=diff.total===0?'<div class="import-empty"><h3>No itinerary changes detected.</h3><p>The imported canonical trip matches your current draft. There is nothing to apply.</p></div>':`<div class="import-impact"><strong>${diff.total} change${diff.total===1?'':'s'} detected</strong>${diff.replacement?'<p class="budget-warning"><strong>Large replacement:</strong> most current visits differ. Check this is the intended trip before applying.</p>':''}<p>Imported: ${escapeHtml(prepared.itinerary.metadata.title)} · ${escapeHtml(prepared.itinerary.metadata.start_date)} → ${escapeHtml(prepared.itinerary.metadata.end_date)} · ${prepared.itinerary.visits.length} visits</p></div>${groups.map(([key,label])=>`<details class="import-group" open><summary>${label} <span>${diff.grouped[key].length}</span></summary><div>${diff.grouped[key].map(importChangeRow).join('')}</div></details>`).join('')}`;
+  const migration=prepared.migrations.length?`<div class="budget-warning"><strong>Migrated in memory:</strong> ${escapeHtml(prepared.migrations.join(', '))}. Saving later persists schema v${prepared.itinerary.schema_version}.</div>`:''; const warnings=prepared.warnings.length?`<div class="budget-warning"><strong>Warnings:</strong> ${prepared.warnings.slice(0,4).map(escapeHtml).join(' ')}</div>`:'';
+  el('import-preview-content').innerHTML=`${migration}${warnings}${body}`; el('apply-import-button').disabled=diff.total===0; el('apply-import-button').textContent=diff.replacement?'Apply replacement to draft':'Apply changes to draft'; el('import-preview-dialog').showModal();
+}
+async function previewImport(file) {
+  if(!file) return; if(file.size>2*1024*1024){ toast('That JSON file is larger than the 2 MiB import limit.', 'error'); return; }
+  try { const raw=await file.text(); const parsed=JSON.parse(raw); const prepared=await apiJson('/api/import-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itinerary:parsed})}); if(!prepared.valid){ showValidationDialog(prepared); toast('The import is invalid and cannot be applied.', 'error'); return; } showImportPreview(prepared,file.name); } catch(error) { toast(`Could not preview import: ${error.message}`, 'error',6000); } finally { const input=el('handoff-import-input')||el('upload-input'); if(input) input.value=''; }
+}
+function applyImportedDraft() { const preview=state.importPreview; if(!preview) return; state.draft=deepClone(preview.itinerary); state.selectedDate=state.draft.metadata.start_date; state.editDayDate=state.selectedDate; state.editEventId=null; state.importPreview=null; el('import-preview-dialog').close(); markDirty(`Imported ${preview.filename || 'itinerary'} applied to draft; save separately to persist it`); renderEverything(); switchTab('handoff'); toast('Imported itinerary is now your draft. Save it separately when ready.', 'success',6000); }
+
 async function uploadDraft(file) {
-  if (!file) return;
-  try {
-    const uploaded = JSON.parse(await file.text());
-    const result = await apiJson('/api/validate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itinerary: uploaded }) });
-    if (!result.valid) { showValidationDialog(result); toast('The uploaded file was not applied because validation failed.', 'error'); return; }
-    state.draft = result.itinerary;
-    state.editEventId = null;
-    state.editVisitId = sortedVisits(result.itinerary)[0]?.id || null;
-    state.editLocationId = Object.keys(result.itinerary.locations)[0] || null;
-    state.selectedDate = result.itinerary.metadata.start_date;
-    state.editDayDate = result.itinerary.metadata.start_date;
-    markDirty(`Uploaded ${file.name}; press Save to write it to the server`);
-    renderEverything();
-    if (result.warnings.length) showValidationDialog(result);
-    const migrationNote = result.migrations.length ? ` Migrated ${result.migrations.join(', ')}.` : '';
-    toast(`Uploaded file loaded into the draft.${migrationNote} The saved file is unchanged.`, 'success', 6500);
-  } catch (error) {
-    toast(`Could not upload the file: ${error.message}`, 'error', 6000);
-  } finally {
-    el('upload-input').value = '';
-  }
+  await previewImport(file);
 }
 
 /* ---------------- Event bindings ---------------- */
@@ -1382,6 +1387,9 @@ function bindEvents() {
   el('validate-button').addEventListener('click', () => validateDraft(true).catch(error => toast(error.message, 'error')));
   el('download-button').addEventListener('click', downloadDraft);
   el('upload-input').addEventListener('change', event => uploadDraft(event.target.files[0]));
+  el('close-import-preview').addEventListener('click', () => el('import-preview-dialog').close());
+  el('cancel-import-preview').addEventListener('click', () => el('import-preview-dialog').close());
+  el('apply-import-button').addEventListener('click', applyImportedDraft);
   el('edit-token').addEventListener('input', event => writeSessionValue('itinerary_edit_token', event.target.value));
 }
 

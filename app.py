@@ -30,6 +30,7 @@ BACKUP_DIR = DATA_DIR / "backups"
 EDIT_TOKEN = os.environ.get("ITINERARY_EDIT_TOKEN", "")
 SAVE_LOCK = threading.Lock()
 MAX_BACKUPS = 50
+MAX_IMPORT_BYTES = 2 * 1024 * 1024
 DEFAULT_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron"
 
 app = FastAPI(title="Trip Planner", version="1.2.0")
@@ -208,6 +209,22 @@ async def validate_endpoint(request: Request) -> JSONResponse:
         payload = await request.json()
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Request body is not valid JSON: {exc}") from exc
+    itinerary = payload.get("itinerary") if isinstance(payload, dict) and "itinerary" in payload else payload
+    result = prepare_itinerary(itinerary)
+    return JSONResponse({"valid": not result["errors"], **result})
+
+
+@app.post("/api/import-preview")
+async def import_preview_endpoint(request: Request) -> JSONResponse:
+    """Validate/migrate untrusted interchange JSON in memory; this endpoint never saves."""
+
+    raw = await request.body()
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="Imported itinerary is too large (maximum 2 MiB).")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Import file is not valid JSON: {exc}") from exc
     itinerary = payload.get("itinerary") if isinstance(payload, dict) and "itinerary" in payload else payload
     result = prepare_itinerary(itinerary)
     return JSONResponse({"valid": not result["errors"], **result})

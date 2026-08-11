@@ -44,6 +44,8 @@ python tools/validate_itinerary.py data/itinerary.example.json
 
 The documented current format is schema v7: [docs/itinerary-schema.md](docs/itinerary-schema.md). It has stable IDs, structured booking lifecycle/timing advice, first-class budget items, typed fields and cross-reference validation. Supported older files are deterministically migrated in memory and are not rewritten until an explicit save.
 
+Use **AI handoff** to download a saved trip or explicitly-labelled current draft, copy concise AI instructions, and preview an imported complete JSON trip. Import migration/validation is in-memory; applying replaces only the draft and the normal revision-protected Save remains separate. See [AI handoff](docs/ai-handoff.md).
+
 Events use floating local wall-clock timestamps. `2027-04-09T08:30` means 08:30 at that point in the trip; it has no `Z` or UTC offset and is not converted through the browser timezone. Events can last exact minutes or span several days.
 
 Download/upload supports an AI-assisted workflow: download JSON, edit it with a person or AI, upload it into a browser draft, review validation, then explicitly save. Unknown extension fields are preserved. Keep a backup and never bypass validation when generating files.

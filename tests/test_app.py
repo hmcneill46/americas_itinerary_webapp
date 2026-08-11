@@ -156,6 +156,28 @@ def test_validate_endpoint_returns_migrated_document():
     assert isinstance(body["itinerary"]["bookings"][0], dict)
 
 
+def test_import_preview_migrates_in_memory_and_never_saves(tmp_path, monkeypatch):
+    legacy, _ = legacy_v4_itinerary()
+    target, _ = configure_temp_data(tmp_path, monkeypatch)
+    before = target.read_bytes()
+    response = TestClient(itinerary_app.app).post("/api/import-preview", json={"itinerary": legacy})
+    body = response.json()
+    assert response.status_code == 200 and body["valid"] is True
+    assert body["migrations"] == ["v4->v5", "v5->v6", "v6->v7"]
+    assert target.read_bytes() == before
+
+
+def test_import_preview_rejects_bad_json_future_schema_and_large_body(tmp_path, monkeypatch):
+    configure_temp_data(tmp_path, monkeypatch)
+    client = TestClient(itinerary_app.app)
+    assert client.post("/api/import-preview", content=b"not json").status_code == 400
+    future = load_example(); future["schema_version"] = 999
+    response = client.post("/api/import-preview", json={"itinerary": future})
+    assert response.status_code == 200 and response.json()["valid"] is False
+    response = client.post("/api/import-preview", content=b" " * (itinerary_app.MAX_IMPORT_BYTES + 1))
+    assert response.status_code == 413
+
+
 def test_get_migrates_legacy_file_in_memory_without_rewriting(tmp_path, monkeypatch):
     legacy, _ = legacy_v4_itinerary()
     target, _ = configure_temp_data(tmp_path, monkeypatch, legacy)
