@@ -10,7 +10,15 @@ function floatingMs(value) {
   return match ? Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), Number(match[6] || 0)) : NaN;
 }
 
-const clamp = value => Math.max(0, Math.min(1, value));
+function dateKey(ms) {
+  const date = new Date(ms);
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+export function normaliseScheduleMode(value) {
+  return value === 'places' ? 'places' : 'events';
+}
 
 export function normaliseCategorySelection(categories, selected) {
   const allowed = new Set(categories || []);
@@ -44,79 +52,88 @@ export function transportStyleKey(mode) {
   return 'mixed';
 }
 
-export function deriveTripFlow(itinerary) {
-  const tripStart = dateMs(itinerary?.metadata?.start_date);
-  const tripEnd = dateMs(itinerary?.metadata?.end_date) + DAY_MS;
-  if (!Number.isFinite(tripStart) || !Number.isFinite(tripEnd) || tripEnd <= tripStart) {
-    return { startMs: 0, endMs: 0, durationMs: 0, days: 0, stays: [], travel: [], countries: [] };
-  }
-  const durationMs = tripEnd - tripStart;
-  const locations = itinerary.locations || {};
-  const visits = [...(itinerary.visits || [])].sort((a, b) => Number(a.order) - Number(b.order));
-  const stays = visits.map(visit => {
-    const startMs = dateMs(visit.start_date);
-    const endMs = dateMs(visit.end_date) + DAY_MS;
-    const location = locations[visit.location_id] || {};
-    return {
-      id: `stay:${visit.id}`, kind: 'stay', visitId: visit.id, order: Number(visit.order),
-      locationId: visit.location_id, name: location.name || visit.location_id,
-      country: location.country || '', start: visit.start_date, end: visit.end_date,
-      startMs, endMs, left: clamp((startMs - tripStart) / durationMs),
-      width: Math.max(0, (endMs - startMs) / durationMs),
-      days: Math.max(1, Math.round((endMs - startMs) / DAY_MS)),
-    };
-  });
+export function clipFloatingIntervalToDay(start, end, day) {
+  const startMs = floatingMs(start); const endMs = floatingMs(end); const dayStart = dateMs(day);
+  if (![startMs, endMs, dayStart].every(Number.isFinite) || endMs <= startMs) return null;
+  const dayEnd = dayStart + DAY_MS;
+  if (startMs >= dayEnd || endMs <= dayStart) return null;
+  return {
+    startMinute: (Math.max(startMs, dayStart) - dayStart) / 60_000,
+    endMinute: (Math.min(endMs, dayEnd) - dayStart) / 60_000,
+  };
+}
 
-  const travel = (itinerary.events || []).filter(event => {
+function explicitTravelItems(itinerary) {
+  const locations = itinerary.locations || {};
+  return (itinerary.events || []).filter(event => {
     return event.transport_mode && event.from_location_id && event.to_location_id
       && event.from_location_id !== event.to_location_id
       && locations[event.from_location_id] && locations[event.to_location_id];
   }).map(event => {
-    const startMs = floatingMs(event.actual_start || event.start);
-    const endMs = floatingMs(event.actual_end || event.end);
+    let displayStart = event.actual_start || event.start;
+    let displayEnd = event.actual_end || event.end;
+    if (!(floatingMs(displayEnd) > floatingMs(displayStart))) {
+      displayStart = event.start; displayEnd = event.end;
+    }
     return {
-      id: `travel:${event.id}`, kind: 'travel', eventId: event.id,
-      mode: event.transport_mode, modeKey: transportStyleKey(event.transport_mode),
-      title: event.title, fromLocationId: event.from_location_id, toLocationId: event.to_location_id,
+      id: `travel:${event.id}`, kind: 'travel', eventId: event.id, visitId: event.visit_id || '',
+      mode: event.transport_mode, modeKey: transportStyleKey(event.transport_mode), title: event.title,
+      fromLocationId: event.from_location_id, toLocationId: event.to_location_id,
       from: locations[event.from_location_id].name, to: locations[event.to_location_id].name,
       start: event.start, end: event.end, actualStart: event.actual_start || '', actualEnd: event.actual_end || '',
-      outcome: event.outcome || 'planned', startMs, endMs,
-      left: clamp((startMs - tripStart) / durationMs),
-      width: Math.max(0, (endMs - startMs) / durationMs), estimated: false,
+      displayStart, displayEnd, outcome: event.outcome || 'planned', timed: true, estimatedDurationHours: null,
     };
-  }).filter(item => Number.isFinite(item.startMs) && Number.isFinite(item.endMs) && item.endMs > item.startMs)
-    .sort((a, b) => a.startMs - b.startMs);
+  }).filter(item => floatingMs(item.displayEnd) > floatingMs(item.displayStart));
+}
+
+export function derivePlacesTravelDays(itinerary) {
+  const days = Object.fromEntries((itinerary?.days || []).map(day => [day.date, { stays: [], travel: [], untimedTravel: [] }]));
+  const locations = itinerary?.locations || {};
+  const visits = [...(itinerary?.visits || [])].sort((a, b) => Number(a.order) - Number(b.order));
+  const stays = visits.map(visit => {
+    const location = locations[visit.location_id] || {};
+    const startMs = dateMs(visit.start_date); const endMs = dateMs(visit.end_date);
+    const item = {
+      id: `stay:${visit.id}`, kind: 'stay', visitId: visit.id, order: Number(visit.order), locationId: visit.location_id,
+      name: location.name || visit.location_id, country: location.country || '', start: visit.start_date, end: visit.end_date,
+      days: Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(1, Math.round((endMs - startMs) / DAY_MS) + 1) : 1,
+    };
+    if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
+      for (let cursor = startMs; cursor <= endMs; cursor += DAY_MS) {
+        const date = dateKey(cursor);
+        if (days[date]) days[date].stays.push({ itemId: item.id, startMinute: 0, endMinute: 1440 });
+      }
+    }
+    return item;
+  });
+
+  const travel = explicitTravelItems(itinerary);
+  for (const item of travel) {
+    for (const date of Object.keys(days)) {
+      const clip = clipFloatingIntervalToDay(item.displayStart, item.displayEnd, date);
+      if (clip) days[date].travel.push({ itemId: item.id, ...clip });
+    }
+  }
 
   for (let index = 1; index < visits.length; index += 1) {
     const visit = visits[index]; const previous = visits[index - 1];
-    if (!visit.arrival_mode || !(Number(visit.arrival_hours_estimate) > 0)) continue;
+    if (!visit.arrival_mode || !days[visit.start_date]) continue;
+    const targetMs = dateMs(visit.start_date);
     const hasExplicit = travel.some(item => item.toLocationId === visit.location_id
-      && Math.abs(item.endMs - dateMs(visit.start_date)) <= DAY_MS * 2);
+      && Math.abs(floatingMs(item.end) - targetMs) <= DAY_MS * 2);
     if (hasExplicit) continue;
-    const endMs = dateMs(visit.start_date) + 12 * 3_600_000;
-    const startMs = endMs - Number(visit.arrival_hours_estimate) * 3_600_000;
-    travel.push({
+    const item = {
       id: `arrival:${visit.id}`, kind: 'travel', eventId: '', visitId: visit.id,
       mode: visit.arrival_mode, modeKey: transportStyleKey(visit.arrival_mode), title: visit.arrival_summary || visit.arrival_mode,
       fromLocationId: previous.location_id, toLocationId: visit.location_id,
       from: locations[previous.location_id]?.name || previous.location_id,
       to: locations[visit.location_id]?.name || visit.location_id,
-      start: '', end: '', actualStart: '', actualEnd: '', outcome: 'planned', startMs, endMs,
-      left: clamp((startMs - tripStart) / durationMs), width: Math.max(0, (endMs - startMs) / durationMs), estimated: true,
-    });
+      start: '', end: '', actualStart: '', actualEnd: '', displayStart: '', displayEnd: '', outcome: 'planned', timed: false,
+      estimatedDurationHours: Number(visit.arrival_hours_estimate) > 0 ? Number(visit.arrival_hours_estimate) : null,
+    };
+    travel.push(item); days[visit.start_date].untimedTravel.push({ itemId: item.id });
   }
-  travel.sort((a, b) => a.startMs - b.startMs);
 
-  const countries = [];
-  for (const stay of stays) {
-    const previous = countries.at(-1);
-    if (previous && previous.country === stay.country && previous.endMs >= stay.startMs) {
-      previous.endMs = Math.max(previous.endMs, stay.endMs);
-      previous.width = (previous.endMs - previous.startMs) / durationMs;
-    } else countries.push({
-      id: `country:${stay.order}`, country: stay.country, startMs: stay.startMs, endMs: stay.endMs,
-      left: stay.left, width: stay.width,
-    });
-  }
-  return { startMs: tripStart, endMs: tripEnd, durationMs, days: Math.round(durationMs / DAY_MS), stays, travel, countries };
+  const items = new Map([...stays, ...travel].map(item => [item.id, item]));
+  return { days, stays, travel, items };
 }

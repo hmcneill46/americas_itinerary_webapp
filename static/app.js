@@ -7,8 +7,9 @@ import { semanticDiff } from './import-diff.js?v=import-v1';
 import { deriveToday } from './today.js?v=today-v1';
 import { createSnapshot, readOfflineSnapshot, saveOfflineSnapshot, clearOfflineSnapshot } from './offline-store.js?v=offline-v5';
 import {
-  deriveTripFlow, filteredEvents, normaliseCategorySelection, selectionAfterFilter, setCategoryVisibility,
-} from './timeline.js?v=timeline-v1';
+  clipFloatingIntervalToDay, derivePlacesTravelDays, filteredEvents, normaliseCategorySelection,
+  normaliseScheduleMode, selectionAfterFilter, setCategoryVisibility,
+} from './timeline.js?v=schedule-modes-v4';
 
 'use strict';
 
@@ -26,7 +27,11 @@ const state = {
   editTab: 'events',
   selectedDate: '',
   selectedEventId: null,
-  selectedFlowId: null,
+  selectedPlaceTravelId: null,
+  scheduleMode: 'events',
+  scheduleModeInitialised: false,
+  scheduleSearches: { events: '', places: '' },
+  filterReturnY: null,
   categoryFilters: null,
   timelineReturn: null,
   editEventId: null,
@@ -329,9 +334,7 @@ function renderEverything() {
   populateCategoryControls();
   if (state.activeTab === 'day') {
     renderDayView();
-    renderEventDetails();
-  } else if (state.activeTab === 'flow') {
-    renderTripFlow();
+    renderScheduleDetails();
   } else if (state.activeTab === 'map') {
     renderMap(true);
   } else if (state.activeTab === 'budget') {
@@ -352,8 +355,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-button').forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
   document.querySelectorAll('.view-panel').forEach(panel => panel.classList.toggle('active', panel.id === `view-${tab}`));
   window.scrollTo(0, 0);
-  if (tab === 'day') { renderDayView(); renderEventDetails(); }
-  if (tab === 'flow') renderTripFlow();
+  if (tab === 'day') { renderDayView(); renderScheduleDetails(); }
   if (tab === 'map') renderMap(false);
   if (tab === 'budget') renderBudget();
   if (tab === 'bookings') renderBookings();
@@ -370,7 +372,7 @@ function switchEditTab(tab) {
   renderEditView();
 }
 
-/* ---------------- Schedule and Trip Flow timelines ---------------- */
+/* ---------------- Schedule timelines ---------------- */
 function updateCategoryFilterCount(categories) {
   const visible = state.categoryFilters?.size ?? categories.length;
   el('category-filter-count').textContent = visible === categories.length ? 'All' : `${visible}/${categories.length}`;
@@ -383,32 +385,98 @@ function commitCategoryFilters(next) {
   const visibleIds = filteredEvents(data.events, state.categoryFilters).map(event => event.id);
   const retained = selectionAfterFilter(state.selectedEventId, visibleIds);
   if (retained !== state.selectedEventId) state.selectedEventId = null;
-  populateCategoryControls(); renderDayView(); renderEventDetails();
+  updateCategoryFilterCount(categories);
+  document.querySelectorAll('[data-filter-category]').forEach(input => { input.checked = state.categoryFilters.has(input.dataset.filterCategory); });
+  if (state.scheduleMode === 'events') { renderDayView(); renderScheduleDetails(); }
 }
 
 function populateCategoryControls() {
   const data = currentData();
   const categories = Object.keys(data.metadata.category_colours || {});
+  if (!state.scheduleModeInitialised) {
+    state.scheduleMode = normaliseScheduleMode(readSessionValue('trip_planner_schedule_mode'));
+    state.scheduleModeInitialised = true;
+  }
   if (state.categoryFilters == null) {
     let stored = null;
     try { const value = readSessionValue('trip_planner_schedule_categories'); stored = value ? JSON.parse(value) : null; } catch { stored = null; }
     state.categoryFilters = normaliseCategorySelection(categories, stored);
   } else state.categoryFilters = normaliseCategorySelection(categories, state.categoryFilters);
-  const options = el('category-filter-options');
-  options.replaceChildren(...categories.map(category => {
-    const label = document.createElement('label'); label.className = 'filter-option';
-    const input = document.createElement('input'); input.type = 'checkbox'; input.checked = state.categoryFilters.has(category);
-    input.setAttribute('aria-label', `Show ${category}`);
-    input.addEventListener('change', () => commitCategoryFilters(setCategoryVisibility(state.categoryFilters, category, input.checked)));
-    const swatch = document.createElement('span'); swatch.className = 'filter-swatch'; swatch.style.backgroundColor = colourForCategory(category, data);
-    const text = document.createElement('span'); text.textContent = category;
-    label.append(input, swatch, text); return label;
-  }));
+  document.querySelectorAll('[data-filter-options]').forEach(options => options.replaceChildren(...categories.map(category => {
+      const label = document.createElement('label'); label.className = 'filter-option';
+      const input = document.createElement('input'); input.type = 'checkbox'; input.checked = state.categoryFilters.has(category);
+      input.dataset.filterCategory = category; input.setAttribute('aria-label', `Show ${category}`);
+      input.addEventListener('change', () => commitCategoryFilters(setCategoryVisibility(state.categoryFilters, category, input.checked)));
+      const swatch = document.createElement('span'); swatch.className = 'filter-swatch'; swatch.style.backgroundColor = colourForCategory(category, data);
+      const text = document.createElement('span'); text.textContent = category;
+      label.append(input, swatch, text); return label;
+    })));
   updateCategoryFilterCount(categories);
   const eventCategory = el('event-category');
   const selected = eventCategory.value;
   eventCategory.innerHTML = categories.map(category => `<option>${escapeHtml(category)}</option>`).join('');
   if (categories.includes(selected)) eventCategory.value = selected;
+}
+
+function updateScheduleModeUi() {
+  document.querySelectorAll('[data-schedule-mode]').forEach(button => {
+    const active = button.dataset.scheduleMode === state.scheduleMode;
+    button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
+  });
+  el('category-filter-control').classList.toggle('hidden', state.scheduleMode !== 'events');
+  el('day-search').placeholder = state.scheduleMode === 'events' ? 'Activity, location or note' : 'Place, country, route or transport';
+  el('day-search').value = state.scheduleSearches[state.scheduleMode];
+  el('day-search-label').textContent = 'Search';
+  el('view-day').dataset.currentScheduleMode = state.scheduleMode;
+}
+
+function setScheduleMode(mode) {
+  const next = normaliseScheduleMode(mode);
+  state.scheduleSearches[state.scheduleMode] = el('day-search').value;
+  if (next === state.scheduleMode) return;
+  closeScheduleFilters(false); state.scheduleMode = next; writeSessionValue('trip_planner_schedule_mode', next);
+  state.selectedEventId = null; state.selectedPlaceTravelId = null;
+  updateScheduleModeUi(); renderDayView(); renderScheduleDetails();
+}
+
+function isPhoneFilter() { return window.matchMedia('(max-width: 720px)').matches; }
+
+function sizePhoneFilterDialog() {
+  const dialog = el('schedule-filter-dialog'); if (!isPhoneFilter()) { dialog.removeAttribute('style'); return; }
+  const viewport = window.visualViewport;
+  const width = viewport?.width || document.documentElement.clientWidth;
+  const height = viewport?.height || document.documentElement.clientHeight;
+  dialog.style.width = `${width}px`; dialog.style.height = `${height}px`;
+  dialog.style.left = `${viewport?.offsetLeft || 0}px`; dialog.style.top = `${viewport?.offsetTop || 0}px`;
+}
+
+function openScheduleFilters() {
+  if (state.scheduleMode !== 'events') return;
+  const trigger = el('category-filter-trigger'); trigger.setAttribute('aria-expanded', 'true');
+  if (isPhoneFilter()) {
+    state.filterReturnY = window.scrollY;
+    sizePhoneFilterDialog();
+    const dialog = el('schedule-filter-dialog'); if (!dialog.open) dialog.showModal();
+    dialog.querySelector('input')?.focus();
+  } else {
+    el('category-filter-popover').classList.remove('hidden');
+    el('category-filter-popover').querySelector('input')?.focus();
+  }
+}
+
+function closeScheduleFilters(restoreFocus = true) {
+  const returnY = state.filterReturnY; state.filterReturnY = null;
+  const dialog = el('schedule-filter-dialog'); if (dialog.open) dialog.close();
+  el('category-filter-popover').classList.add('hidden'); el('category-filter-trigger').setAttribute('aria-expanded', 'false');
+  if (restoreFocus) el('category-filter-trigger').focus({ preventScroll: true });
+  if (returnY != null) requestAnimationFrame(() => window.scrollTo({ top: returnY, behavior: 'instant' }));
+}
+
+function handleFilterAction(action) {
+  const categories = Object.keys(currentData().metadata.category_colours || {});
+  if (action === 'all' || action === 'reset') commitCategoryFilters(new Set(categories));
+  else if (action === 'none') commitCategoryFilters(new Set());
+  else if (action === 'done') closeScheduleFilters(true);
 }
 
 function assignLanes(pieces) {
@@ -422,80 +490,109 @@ function assignLanes(pieces) {
   return Math.max(1, laneEnds.length);
 }
 
+function schedulePieceClasses(selectedId, id, extra = '') {
+  return `schedule-piece ${extra} ${selectedId === id ? 'selected' : ''} ${selectedId && selectedId !== id ? 'dimmed' : ''}`;
+}
+
+function scheduleDayMeta(day, compact, placesMode = false) {
+  const context = placesMode ? '' : `<div class="day-summary-text">${escapeHtml(day.summary)}</div>${day.notes ? `<div class="day-notes-text">${escapeHtml(day.notes)}</div>` : ''}`;
+  const confidence = placesMode ? '' : `<span class="confidence-badge confidence-${day.confidence}">${day.confidence}</span>`;
+  return `<div class="day-meta">
+    <div class="day-meta-top"><div><div class="day-date">${humanDate(day.date, { year: false })}</div><div class="day-number-small">Day ${day.day_number}</div></div>${confidence}</div>
+    <div class="day-base">${escapeHtml(day.base)}</div><div class="day-country">${escapeHtml(day.country)}</div>${context}
+  </div>`;
+}
+
+function eventDayContent(day, events, search, data) {
+  const pieces = [];
+  for (const event of events) {
+    const clip = clipFloatingIntervalToDay(event.start, event.end, day.date); if (!clip) continue;
+    const searchable = `${event.title} ${event.notes || ''} ${(event.day_summaries || []).join(' ')} ${day.base} ${day.country} ${day.summary} ${day.notes || ''}`.toLowerCase();
+    if (search && !searchable.includes(search)) continue;
+    pieces.push({ event, ...clip });
+  }
+  pieces.sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute);
+  const lanes = assignLanes(pieces); const height = lanes * 28 + 12;
+  const html = pieces.map(piece => {
+    const { event } = piece; const left = piece.startMinute / 1440 * 100;
+    const width = Math.max((piece.endMinute - piece.startMinute) / 1440 * 100, 0.12); const colour = colourForCategory(event.category, data);
+    const label = width > 4 ? event.title : ''; const title = `${event.title} · ${humanTime(formatFloating(parseDateKey(day.date) + piece.startMinute * 60_000))}–${humanTime(formatFloating(parseDateKey(day.date) + piece.endMinute * 60_000))}`;
+    return `<button class="${schedulePieceClasses(state.selectedEventId, event.id, `event-piece ${contrastClass(colour)} ${event.locked ? 'locked' : ''}`)}" data-selection-kind="event" data-selection-id="${escapeHtml(event.id)}" style="left:${left}%;width:${width}%;top:${6 + piece.lane * 28}px;background-color:${colour}" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
+  }).join('');
+  return { html, height, count: pieces.length };
+}
+
+function placesTravelDayContent(day, model, search) {
+  const matches = item => !search || `${item.name || ''} ${item.country || ''} ${item.title || ''} ${item.mode || ''} ${item.from || ''} ${item.to || ''} ${item.outcome || ''}`.toLowerCase().includes(search);
+  const stays = (model.days[day.date]?.stays || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
+  const travel = (model.days[day.date]?.travel || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
+  const untimed = (model.days[day.date]?.untimedTravel || []).map(piece => ({ ...piece, item: model.items.get(piece.itemId) })).filter(piece => matches(piece.item));
+  assignLanes(stays); assignLanes(travel);
+  const stayLanes = stays.length ? Math.max(...stays.map(piece => piece.lane)) + 1 : 0;
+  const travelLanes = travel.length ? Math.max(...travel.map(piece => piece.lane)) + 1 : 0;
+  const stayTop = 6; const travelTop = stayTop + stayLanes * 28 + (travelLanes ? 7 : 0);
+  const untimedTop = travelTop + travelLanes * 28 + (untimed.length ? 7 : 0);
+  const height = Math.max(46, untimedTop + untimed.length * 34 + 6);
+  const stayHtml = stays.map(piece => {
+    const item = piece.item;
+    return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, 'place-travel-piece stay-piece')}" data-selection-kind="place" data-selection-id="${escapeHtml(item.id)}" style="left:0%;width:100%;top:${stayTop + piece.lane * 28}px" title="${escapeHtml(`${item.name} · ${item.country} · ${item.start} to ${item.end}`)}"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.country)}</small></button>`;
+  }).join('');
+  const travelHtml = travel.map(piece => {
+    const item = piece.item; const left = piece.startMinute / 1440 * 100; const width = Math.max((piece.endMinute - piece.startMinute) / 1440 * 100, .12);
+    const outcome = item.outcome === 'planned' ? '' : ` · ${item.outcome}`;
+    return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, `place-travel-piece travel-piece transport-mode-${item.modeKey} outcome-${item.outcome}`)}" data-selection-kind="travel" data-selection-id="${escapeHtml(item.id)}" style="left:${left}%;width:${width}%;top:${travelTop + piece.lane * 28}px" title="${escapeHtml(`${item.mode}: ${item.from} → ${item.to}${outcome}`)}"><strong>${escapeHtml(item.mode)}</strong><small>${escapeHtml(`${item.from} → ${item.to}${outcome}`)}</small></button>`;
+  }).join('');
+  const untimedHtml = untimed.map((piece, index) => {
+    const item = piece.item;
+    return `<button class="${schedulePieceClasses(state.selectedPlaceTravelId, item.id, `place-travel-piece untimed-travel-cue transport-mode-${item.modeKey}`)}" data-selection-kind="travel" data-selection-id="${escapeHtml(item.id)}" style="top:${untimedTop + index * 34}px" title="${escapeHtml(`Timing not recorded: ${item.mode}, ${item.from} → ${item.to}`)}"><strong>Timing not recorded</strong><small>${escapeHtml(`${item.mode} · ${item.from} → ${item.to}`)}</small></button>`;
+  }).join('');
+  return { html: stayHtml + travelHtml + untimedHtml, height, count: stays.length + travel.length + untimed.length };
+}
+
 function renderDayView() {
   const data = currentData();
   if (!data) return;
   const search = el('day-search').value.trim().toLowerCase();
+  state.scheduleSearches[state.scheduleMode] = el('day-search').value;
+  updateScheduleModeUi();
   const compact = el('compact-days').checked;
-  const events = filteredEvents(sortedEvents(data), state.categoryFilters);
+  const events = state.scheduleMode === 'events' ? filteredEvents(sortedEvents(data), state.categoryFilters) : [];
+  const placesModel = state.scheduleMode === 'places' ? derivePlacesTravelDays(data) : null;
   const html = [];
   let visiblePieceCount = 0;
 
   for (const day of data.days) {
-    const dayStart = parseDateKey(day.date);
-    const dayEnd = dayStart + DAY_MS;
-    const pieces = [];
-    for (const event of events) {
-      const eventStart = parseFloating(event.start);
-      const eventEnd = parseFloating(event.end);
-      if (eventStart >= dayEnd) break;
-      if (eventEnd <= dayStart) continue;
-      const searchable = `${event.title} ${event.notes || ''} ${(event.day_summaries || []).join(' ')} ${day.base} ${day.country} ${day.summary} ${day.notes || ''}`.toLowerCase();
-      if (search && !searchable.includes(search)) continue;
-      const pieceStart = Math.max(eventStart, dayStart);
-      const pieceEnd = Math.min(eventEnd, dayEnd);
-      pieces.push({
-        event,
-        startMinute: (pieceStart - dayStart) / 60_000,
-        endMinute: (pieceEnd - dayStart) / 60_000,
-      });
-    }
-    pieces.sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute);
-    visiblePieceCount += pieces.length;
-    const laneCount = assignLanes(pieces);
-    const barHeight = laneCount * 28 + 12;
-    const eventHtml = pieces.map(piece => {
-      const event = piece.event;
-      const left = piece.startMinute / 1440 * 100;
-      const width = Math.max((piece.endMinute - piece.startMinute) / 1440 * 100, 0.12);
-      const colour = colourForCategory(event.category, data);
-      const selected = event.id === state.selectedEventId;
-      const label = width > 4 ? event.title : '';
-      const title = `${event.title} · ${humanTime(formatFloating(dayStart + piece.startMinute * 60_000))}–${humanTime(formatFloating(dayStart + piece.endMinute * 60_000))}`;
-      return `<button class="event-piece ${contrastClass(colour)} ${selected ? 'selected' : ''} ${state.selectedEventId && !selected ? 'dimmed' : ''} ${event.locked ? 'locked' : ''}" data-event-id="${escapeHtml(event.id)}" style="left:${left}%;width:${width}%;top:${6 + piece.lane * 28}px" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
-    }).join('');
-    const notes = day.notes ? `<div class="day-notes-text">${escapeHtml(day.notes)}</div>` : '';
+    const content = state.scheduleMode === 'events' ? eventDayContent(day, events, search, data) : placesTravelDayContent(day, placesModel, search);
+    visiblePieceCount += content.count;
     html.push(`<article class="day-row ${compact ? 'compact' : ''} ${day.date === state.selectedDate ? 'target-day' : ''}" data-date="${day.date}">
-      <div class="day-meta">
-        <div class="day-meta-top"><div><div class="day-date">${humanDate(day.date, { year: false })}</div><div class="day-number-small">Day ${day.day_number}</div></div><span class="confidence-badge confidence-${day.confidence}">${day.confidence}</span></div>
-        <div class="day-base">${escapeHtml(day.base)}</div><div class="day-country">${escapeHtml(day.country)}</div>
-        <div class="day-summary-text">${escapeHtml(day.summary)}</div>${notes}
-      </div>
-      <div class="day-bar-wrap" style="height:${barHeight}px"><div class="day-bar-grid"></div>${eventHtml}</div>
+      ${scheduleDayMeta(day, compact, state.scheduleMode === 'places')}
+      <div class="day-bar-wrap ${state.scheduleMode === 'places' ? 'places-travel-wrap' : ''}" style="height:${content.height}px"><div class="day-bar-grid"></div>${content.html}</div>
     </article>`);
   }
-  const emptyMessage = visiblePieceCount ? '' : `<div class="timeline-empty-state"><strong>${state.categoryFilters.size ? 'No schedule items match' : 'All schedule categories are hidden'}</strong><span>${state.categoryFilters.size ? 'Try another search or adjust Filters.' : 'Open Filters and choose the categories you want to see.'}</span></div>`;
+  const eventsEmpty = state.categoryFilters.size ? 'No schedule items match' : 'All schedule categories are hidden';
+  const emptyMessage = visiblePieceCount ? '' : `<div class="timeline-empty-state"><strong>${state.scheduleMode === 'events' ? eventsEmpty : 'No places or travel match'}</strong><span>${state.scheduleMode === 'events' && !state.categoryFilters.size ? 'Open Filters and choose the categories you want to see.' : 'Try another search or clear the current query.'}</span></div>`;
   el('day-list').innerHTML = emptyMessage + html.join('');
-  el('day-list').querySelectorAll('.event-piece').forEach(piece => {
-    const event = data.events.find(item => item.id === piece.dataset.eventId);
-    piece.style.backgroundColor = colourForCategory(event?.category, data);
-  });
-  el('day-list').querySelectorAll('.event-piece').forEach(piece => piece.addEventListener('click', event => { event.stopPropagation(); selectEvent(piece.dataset.eventId, false, piece); }));
-  el('day-list').classList.toggle('selection-active', Boolean(state.selectedEventId));
+  el('day-list').querySelectorAll('[data-selection-id]').forEach(piece => piece.addEventListener('click', event => {
+    event.stopPropagation();
+    if (piece.dataset.selectionKind === 'event') selectEvent(piece.dataset.selectionId, false, piece);
+    else selectPlaceTravelItem(piece.dataset.selectionId, piece, placesModel);
+  }));
+  el('day-list').classList.toggle('selection-active', Boolean(state.scheduleMode === 'events' ? state.selectedEventId : state.selectedPlaceTravelId));
 }
 
 function selectEvent(eventId, scroll = false, trigger = null) {
+  if (state.scheduleMode !== 'events') { state.scheduleMode = 'events'; writeSessionValue('trip_planner_schedule_mode', 'events'); updateScheduleModeUi(); renderDayView(); }
   state.selectedEventId = eventId;
-  state.selectedFlowId = null;
-  document.querySelectorAll('.event-piece').forEach(piece => {
-    piece.classList.toggle('selected', piece.dataset.eventId === eventId);
-    piece.classList.toggle('dimmed', Boolean(eventId) && piece.dataset.eventId !== eventId);
+  state.selectedPlaceTravelId = null;
+  document.querySelectorAll('.schedule-piece').forEach(piece => {
+    piece.classList.toggle('selected', piece.dataset.selectionId === eventId);
+    piece.classList.toggle('dimmed', Boolean(eventId) && piece.dataset.selectionId !== eventId);
   });
   el('day-list')?.classList.toggle('selection-active', Boolean(eventId));
-  renderEventDetails();
+  renderScheduleDetails();
   if (eventId && isMobileTimeline()) openMobileTimelineDetail('event', eventId, trigger);
   if (scroll) {
-    const first = document.querySelector(`.event-piece[data-event-id="${CSS.escape(eventId)}"]`);
+    const first = document.querySelector(`.event-piece[data-selection-id="${CSS.escape(eventId)}"]`);
     first?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
 }
@@ -533,8 +630,13 @@ function bindEventDetailActions(container, event) {
   applyReadOnlyUi();
 }
 
-function renderEventDetails() {
+function renderScheduleDetails(model = state.scheduleMode === 'places' ? derivePlacesTravelDays(currentData()) : null) {
   const panel = el('event-details'); const data = currentData();
+  if (state.scheduleMode === 'places') {
+    const item = model?.items.get(state.selectedPlaceTravelId);
+    if (!item) { panel.innerHTML = '<div class="empty-details"><div class="empty-icon">↔</div><h2>Select a place or journey</h2><p>Choose a location stay or travel segment to see useful context.</p></div>'; applyReadOnlyUi(); return; }
+    panel.innerHTML = placeTravelDetailsHtml(item, data); bindPlaceTravelDetailActions(panel, item); applyReadOnlyUi(); return;
+  }
   const event = data?.events?.find(item => item.id === state.selectedEventId);
   if (!event) { panel.innerHTML = '<div class="empty-details"><div class="empty-icon">↗</div><h2>Select part of the schedule</h2><p>Choose an event to highlight every part of it, including pieces on other days.</p></div>'; return; }
   panel.innerHTML = eventDetailsHtml(event, data); bindEventDetailActions(panel, event);
@@ -549,21 +651,10 @@ function jumpToDate(dateKey, behaviour = 'smooth') {
   document.querySelector(`.day-row[data-date="${dateKey}"]`)?.scrollIntoView({ block: 'center', behavior: behaviour });
 }
 
-function flowRulerHtml(model) {
-  const interval = model.days <= 21 ? 3 : model.days <= 70 ? 7 : 14;
-  const ticks = [];
-  for (let day = 0; day < model.days; day += interval) {
-    ticks.push(`<span style="left:${day / model.days * 100}%">${escapeHtml(humanDate(formatDateKey(model.startMs + day * DAY_MS), { year: false }))}</span>`);
-  }
-  return ticks.join('');
-}
-
-function flowItem(model, id) { return [...model.stays, ...model.travel].find(item => item.id === id) || null; }
-
-function flowDetailsHtml(item, data, { mobile = false } = {}) {
+function placeTravelDetailsHtml(item, data, { mobile = false } = {}) {
   if (item.kind === 'stay') {
     const visit = getVisit(item.visitId, data); const visitEvents = sortedEvents(data).filter(event => event.visit_id === item.visitId);
-    const notable = visitEvents.filter(event => !event.transport_mode).slice(0, 5);
+    const notable = visitEvents.filter(event => !event.transport_mode && !/sleep|rest|admin|meal|accommodation|travel/i.test(event.category)).slice(0, 5);
     const accommodation = data.bookings.find(booking => booking.visit_id === item.visitId && /accommodation|hostel|hotel/i.test(`${booking.type} ${booking.title}`));
     const visitBudget = calculateBudget(data).visits.find(row => row.id === item.visitId);
     return `<div class="details-card"><div class="details-heading"><div><span class="details-category">Location stay</span><h2 ${mobile ? 'id="timeline-detail-title"' : ''}>${escapeHtml(item.name)}</h2><p class="details-kicker">${escapeHtml(item.country)} · Visit ${item.order}</p></div>${mobile ? '' : '<button type="button" class="icon-button" data-close-timeline aria-label="Close stay details">×</button>'}</div>
@@ -571,72 +662,53 @@ function flowDetailsHtml(item, data, { mobile = false } = {}) {
       <div class="details-grid"><div class="detail-box"><small>Accommodation</small><strong>${escapeHtml(accommodation?.title || 'Not identified')}</strong></div><div class="detail-box"><small>Booking</small><strong>${escapeHtml(accommodation?.lifecycle?.replaceAll('_', ' ') || 'No linked booking')}</strong></div>${visitBudget ? `<div class="detail-box"><small>Expected cost</small><strong>${escapeHtml(formatMoney(visitBudget.expected, data.budget.base_currency))}</strong></div>` : ''}<div class="detail-box"><small>Arrival</small><strong>${escapeHtml(visit?.arrival_mode || 'Not specified')}</strong></div></div>
       ${visit?.notes ? `<div class="details-section"><h3>Visit notes</h3><p>${escapeHtml(visit.notes)}</p></div>` : ''}
       <div class="details-section"><h3>Planned highlights</h3>${notable.length ? `<ul>${notable.map(event => `<li>${escapeHtml(event.title)} · ${escapeHtml(humanDate(event.start.slice(0, 10), { year: false }))}</li>`).join('')}</ul>` : '<p>No activity highlights identified.</p>'}</div>
-      <div class="details-section details-actions"><button class="secondary-button" data-flow-map-visit="${escapeHtml(item.visitId)}">Show on map</button></div></div>`;
+      <div class="details-section details-actions"><button class="secondary-button" data-place-map-visit="${escapeHtml(item.visitId)}">Show on map</button></div></div>`;
   }
   const event = data.events.find(candidate => candidate.id === item.eventId); const booking = event ? data.bookings.find(candidate => candidate.event_id === event.id) : null;
   const cost = event ? data.budget.cost_items.find(candidate => candidate.event_id === event.id || (booking && candidate.id === booking.cost_item_id)) : null;
   const actual = item.actualStart || item.actualEnd ? `<div class="details-section"><h3>Actual journey</h3><p>${item.actualStart ? `Departed ${escapeHtml(humanDateTime(item.actualStart))}` : ''}${item.actualStart && item.actualEnd ? '<br>' : ''}${item.actualEnd ? `Arrived ${escapeHtml(humanDateTime(item.actualEnd))}` : ''}</p></div>` : '';
+  const timing = item.timed ? `<strong>${humanDateTime(item.start)}</strong><span>until ${humanDateTime(item.end)}</span>` : `<strong>Timing not recorded</strong>${item.estimatedDurationHours ? `<span>Estimated duration: ${escapeHtml(item.estimatedDurationHours)} hours</span>` : '<span>Arrival method is known, but no exact time is stored.</span>'}`;
   return `<div class="details-card"><div class="details-heading"><div><span class="details-category">${escapeHtml(item.mode)}</span><h2 ${mobile ? 'id="timeline-detail-title"' : ''}>${escapeHtml(item.from)} → ${escapeHtml(item.to)}</h2><p class="details-kicker">${item.estimated ? 'Estimated from visit arrival information' : escapeHtml(item.title)}</p></div>${mobile ? '' : '<button type="button" class="icon-button" data-close-timeline aria-label="Close journey details">×</button>'}</div>
-    <div class="details-time">${item.start ? `<strong>${humanDateTime(item.start)}</strong><span>until ${humanDateTime(item.end)}</span>` : `<strong>${escapeHtml(formatDuration((item.endMs - item.startMs) / 60_000))} estimated</strong>`}</div>
+    <div class="details-time">${timing}</div>
     <div class="details-grid"><div class="detail-box"><small>Mode</small><strong>${escapeHtml(item.mode)}</strong></div><div class="detail-box"><small>Outcome</small><strong>${escapeHtml(String(item.outcome).replaceAll('_', ' '))}</strong></div><div class="detail-box"><small>Provider</small><strong>${escapeHtml(booking?.provider || 'Not recorded')}</strong></div><div class="detail-box"><small>Reference</small><strong>${escapeHtml(booking?.reference || 'Not recorded')}</strong></div>${cost ? `<div class="detail-box"><small>Expected cost</small><strong>${escapeHtml(formatMoney(itemExpected(cost, data), cost.currency))}</strong></div>` : ''}</div>
     ${actual}${event?.outcome_note || event?.notes ? `<div class="details-section"><h3>Journey notes</h3><p>${escapeHtml(event.outcome_note || event.notes)}</p></div>` : ''}
-    <div class="details-section details-actions">${item.eventId ? `<button class="secondary-button" data-flow-map-event="${escapeHtml(item.eventId)}">Show route on map</button>` : ''}</div></div>`;
+    <div class="details-section details-actions">${item.eventId ? `<button class="secondary-button" data-place-map-event="${escapeHtml(item.eventId)}">Show route on map</button>` : `<button class="secondary-button" data-place-map-visit="${escapeHtml(item.visitId)}">Show destination on map</button>`}</div></div>`;
 }
 
-function bindFlowDetailActions(container, item) {
+function bindPlaceTravelDetailActions(container, item) {
   container.querySelector('[data-close-timeline]')?.addEventListener('click', clearTimelineSelection);
-  container.querySelector('[data-flow-map-visit]')?.addEventListener('click', () => { state.pendingMapFocus = { type: 'visit', id: item.visitId }; dismissMobileTimelineDetail(false); switchTab('map'); });
-  container.querySelector('[data-flow-map-event]')?.addEventListener('click', () => { state.pendingMapFocus = { type: 'route', id: item.eventId }; dismissMobileTimelineDetail(false); switchTab('map'); });
+  container.querySelector('[data-place-map-visit]')?.addEventListener('click', () => { state.pendingMapFocus = { type: 'visit', id: item.visitId }; dismissMobileTimelineDetail(false); switchTab('map'); });
+  container.querySelector('[data-place-map-event]')?.addEventListener('click', () => { state.pendingMapFocus = { type: 'route', id: item.eventId }; dismissMobileTimelineDetail(false); switchTab('map'); });
 }
 
-function renderFlowDetails(model = deriveTripFlow(currentData())) {
-  const panel = el('flow-details'); const item = flowItem(model, state.selectedFlowId);
-  if (!item) { panel.innerHTML = '<div class="empty-details"><div class="empty-icon">↔</div><h2>Select a stay or journey</h2><p>Choose a location or travel segment to see useful context without the full daily schedule.</p></div>'; applyReadOnlyUi(); return; }
-  panel.innerHTML = flowDetailsHtml(item, currentData()); bindFlowDetailActions(panel, item); applyReadOnlyUi();
-}
-
-function renderTripFlow() {
-  const data = currentData(); if (!data) return; const model = deriveTripFlow(data); const timeline = el('flow-timeline');
-  if (!model.stays.length) { timeline.innerHTML = '<div class="budget-empty flow-empty">No visits are available for Trip Flow.</div>'; renderFlowDetails(model); return; }
-  const pixelWidth = Math.max(920, model.days * 23); timeline.style.width = `${pixelWidth}px`;
-  const countries = model.countries.map(country => `<span class="flow-country" style="left:${country.left * 100}%;width:${country.width * 100}%">${escapeHtml(country.country)}</span>`).join('');
-  const stays = model.stays.map(item => `<button class="flow-segment flow-stay ${item.id === state.selectedFlowId ? 'selected' : ''} ${state.selectedFlowId && item.id !== state.selectedFlowId ? 'dimmed' : ''}" data-flow-id="${escapeHtml(item.id)}" style="left:${item.left * 100}%;width:${item.width * 100}%" title="${escapeHtml(`${item.name} · ${item.start} to ${item.end}`)}"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.country)} · ${item.days}d</small></button>`).join('');
-  const travel = model.travel.map(item => `<button class="flow-segment flow-travel flow-mode-${item.modeKey} ${item.id === state.selectedFlowId ? 'selected' : ''} ${state.selectedFlowId && item.id !== state.selectedFlowId ? 'dimmed' : ''}" data-flow-id="${escapeHtml(item.id)}" style="left:${item.left * 100}%;width:${item.width * 100}%" title="${escapeHtml(`${item.mode}: ${item.from} to ${item.to}`)}"><strong>${escapeHtml(item.mode)}</strong><small>${escapeHtml(item.from)} → ${escapeHtml(item.to)}</small></button>`).join('');
-  timeline.innerHTML = `<div class="flow-ruler">${flowRulerHtml(model)}</div><div class="flow-country-row">${countries}</div><div class="flow-track" style="--flow-days:${model.days}"><span class="flow-lane-label stays">Location stays</span><span class="flow-lane-label travel">Travel</span>${stays}${travel}</div>`;
-  timeline.classList.toggle('selection-active', Boolean(state.selectedFlowId));
-  timeline.querySelectorAll('[data-flow-id]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); selectFlowItem(button.dataset.flowId, button, model); }));
-  timeline.querySelector('.flow-track').addEventListener('click', event => { if (!event.target.closest('[data-flow-id]')) clearTimelineSelection(); });
-  renderFlowDetails(model);
-}
-
-function selectFlowItem(id, trigger = null, model = deriveTripFlow(currentData())) {
-  state.selectedFlowId = id; state.selectedEventId = null; renderTripFlow();
-  if (isMobileTimeline()) openMobileTimelineDetail('flow', id, trigger, model);
+function selectPlaceTravelItem(id, trigger = null, model = derivePlacesTravelDays(currentData())) {
+  state.selectedPlaceTravelId = id; state.selectedEventId = null; renderDayView(); renderScheduleDetails(model);
+  if (isMobileTimeline()) openMobileTimelineDetail('placeTravel', id, trigger, model);
 }
 
 function isMobileTimeline() { return window.matchMedia('(max-width: 1050px)').matches; }
-function activeTimelineScroller(tab = state.activeTab) { return tab === 'flow' ? document.querySelector('.flow-pane') : document.querySelector('.timeline-pane'); }
+function activeTimelineScroller() { return document.querySelector('.timeline-pane'); }
 
 function openMobileTimelineDetail(kind, id, trigger, suppliedModel = null) {
   const dialog = el('timeline-detail-dialog'); const content = el('timeline-detail-content');
-  state.timelineReturn = { tab: state.activeTab, pageY: window.scrollY, scrollLeft: activeTimelineScroller()?.scrollLeft || 0, kind, id };
+  state.timelineReturn = { pageY: window.scrollY, scrollLeft: activeTimelineScroller()?.scrollLeft || 0, kind, id };
   if (kind === 'event') { const event = currentData().events.find(item => item.id === id); content.innerHTML = eventDetailsHtml(event, currentData(), { mobile: true }); bindEventDetailActions(content, event); }
-  else { const model = suppliedModel || deriveTripFlow(currentData()); const item = flowItem(model, id); content.innerHTML = flowDetailsHtml(item, currentData(), { mobile: true }); bindFlowDetailActions(content, item); }
+  else { const model = suppliedModel || derivePlacesTravelDays(currentData()); const item = model.items.get(id); content.innerHTML = placeTravelDetailsHtml(item, currentData(), { mobile: true }); bindPlaceTravelDetailActions(content, item); }
   document.body.classList.add('timeline-detail-open'); dialog.showModal(); el('close-timeline-detail').focus();
 }
 
 function dismissMobileTimelineDetail(restore = true) {
   const dialog = el('timeline-detail-dialog'); const saved = state.timelineReturn; if (dialog.open) dialog.close();
-  document.body.classList.remove('timeline-detail-open'); state.timelineReturn = null; state.selectedEventId = null; state.selectedFlowId = null;
+  document.body.classList.remove('timeline-detail-open'); state.timelineReturn = null; state.selectedEventId = null; state.selectedPlaceTravelId = null;
   if (!restore || !saved) return;
-  if (saved.tab === 'flow') renderTripFlow(); else { renderDayView(); renderEventDetails(); }
-  requestAnimationFrame(() => { const scroller = activeTimelineScroller(saved.tab); if (scroller) scroller.scrollLeft = saved.scrollLeft; window.scrollTo({ top: saved.pageY, behavior: 'instant' }); const selector = saved.kind === 'event' ? `.event-piece[data-event-id="${CSS.escape(saved.id)}"]` : `[data-flow-id="${CSS.escape(saved.id)}"]`; document.querySelector(selector)?.focus({ preventScroll: true }); });
+  renderDayView(); renderScheduleDetails();
+  requestAnimationFrame(() => { const scroller = activeTimelineScroller(); if (scroller) scroller.scrollLeft = saved.scrollLeft; window.scrollTo({ top: saved.pageY, behavior: 'instant' }); document.querySelector(`[data-selection-id="${CSS.escape(saved.id)}"]`)?.focus({ preventScroll: true }); });
 }
 
 function clearTimelineSelection() {
   if (el('timeline-detail-dialog').open) { dismissMobileTimelineDetail(true); return; }
-  state.selectedEventId = null; state.selectedFlowId = null;
-  if (state.activeTab === 'flow') renderTripFlow(); else if (state.activeTab === 'day') { renderDayView(); renderEventDetails(); }
+  state.selectedEventId = null; state.selectedPlaceTravelId = null;
+  if (state.activeTab === 'day') { renderDayView(); renderScheduleDetails(); }
 }
 
 /* ---------------- Map ---------------- */
@@ -1517,12 +1589,19 @@ function bindEvents() {
   el('day-next').addEventListener('click', () => jumpToDate(addDays(state.selectedDate, 1)));
   el('today-start-button').addEventListener('click', () => jumpToDate(currentData().metadata.start_date));
   el('day-search').addEventListener('input', renderDayView);
-  el('category-select-all').addEventListener('click', () => commitCategoryFilters(new Set(Object.keys(currentData().metadata.category_colours || {}))));
-  el('category-select-none').addEventListener('click', () => commitCategoryFilters(new Set()));
-  el('category-reset').addEventListener('click', () => commitCategoryFilters(new Set(Object.keys(currentData().metadata.category_colours || {}))));
-  el('category-filter-done').addEventListener('click', () => { el('category-filter-menu').open = false; });
+  document.querySelectorAll('[data-schedule-mode]').forEach(button => button.addEventListener('click', () => setScheduleMode(button.dataset.scheduleMode)));
+  el('category-filter-trigger').addEventListener('click', openScheduleFilters);
+  document.querySelectorAll('[data-filter-action]').forEach(button => button.addEventListener('click', () => handleFilterAction(button.dataset.filterAction)));
+  el('close-schedule-filter').addEventListener('click', () => closeScheduleFilters(true));
+  el('schedule-filter-dialog').addEventListener('cancel', event => { event.preventDefault(); closeScheduleFilters(true); });
+  window.addEventListener('resize', () => { if (el('schedule-filter-dialog').open) sizePhoneFilterDialog(); });
+  window.visualViewport?.addEventListener('resize', () => { if (el('schedule-filter-dialog').open) sizePhoneFilterDialog(); });
+  document.addEventListener('pointerdown', event => {
+    const popover = el('category-filter-popover');
+    if (!popover.classList.contains('hidden') && !event.target.closest('#category-filter-control')) closeScheduleFilters(false);
+  });
   el('compact-days').addEventListener('change', renderDayView);
-  document.querySelector('#view-day .timeline-pane').addEventListener('click', event => { if (!event.target.closest('.event-piece')) clearTimelineSelection(); });
+  document.querySelector('#view-day .timeline-pane').addEventListener('click', event => { if (!event.target.closest('.schedule-piece')) clearTimelineSelection(); });
   el('close-timeline-detail').addEventListener('click', () => dismissMobileTimelineDetail(true));
   el('timeline-detail-dialog').addEventListener('cancel', event => { event.preventDefault(); dismissMobileTimelineDetail(true); });
 
@@ -1540,8 +1619,9 @@ function bindEvents() {
   el('map-expand').addEventListener('click', () => toggleMapExpanded());
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
-    if (state.mapExpanded) toggleMapExpanded(false);
-    else if (state.selectedEventId || state.selectedFlowId) clearTimelineSelection();
+    if (el('schedule-filter-dialog').open || !el('category-filter-popover').classList.contains('hidden')) closeScheduleFilters(true);
+    else if (state.mapExpanded) toggleMapExpanded(false);
+    else if (state.selectedEventId || state.selectedPlaceTravelId) clearTimelineSelection();
   });
 
   el('add-cost-button').addEventListener('click', () => openCostDialog());

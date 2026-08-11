@@ -1,6 +1,6 @@
 # Trip Planner — self-hosted web app
 
-Trip Planner is a local-first itinerary application for trips anywhere in the world. It keeps one human-readable JSON document and provides connected Schedule, Trip Flow, route-map and editing views without a database or heavy frontend framework.
+Trip Planner is a local-first itinerary application for trips anywhere in the world. It keeps one human-readable JSON document and provides connected Schedule, route-map and editing views without a database or heavy frontend framework.
 
 The canonical private file is `data/itinerary.json`. For a fresh checkout:
 
@@ -52,8 +52,7 @@ Download/upload supports an AI-assisted workflow: download JSON, edit it with a 
 
 ## Views and editing
 
-- **Schedule** renders exact-minute event segments, overlaps, multi-day clipping, search and independent category filters. Desktop selections use a closeable detail panel; phone selections open a full-screen detail view.
-- **Trip Flow** derives a macro location/travel timeline from visits and transport events, including repeated stays and country transitions. It does not add display-only fields to the itinerary schema.
+- **Schedule** has two day-by-day modes on the same 24-hour timeline. **Events** renders exact-minute event segments, overlaps, multi-day clipping, search and independent category filters. **Places & travel** derives visit stays, explicit timed journeys and honest untimed arrival cues without compressing the whole trip or adding display-only fields to the schema. Desktop selections use a closeable detail panel; phone selections open a full-screen detail view.
 - **Map** uses a locally served, pinned MapLibre GL JS runtime with an OpenFreeMap Positron vector basemap. It shows ordered visit markers, repeated visits, secondary event locations and tappable dashed route connections. Map selections can open the relevant day or event, while explicit focus actions leave ordinary manual exploration alone.
 - **Budget** keeps exact-decimal native-currency cost items, stored FX snapshots, expected/committed/paid totals, deposits/refunds, category and visit breakdowns, plus a responsive cost editor and quick-expense flow. No live currency service is used; an item without an FX snapshot is visibly excluded from complete base-currency totals.
 - **Bookings** is an action-first view: lifecycle, explainable timing strategy, moving lead-time recommendations, hard deadlines, risk/flexibility rationale and optional Budget links. It does not scrape providers or claim live availability.

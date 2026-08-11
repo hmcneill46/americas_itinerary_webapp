@@ -19,6 +19,8 @@ Create `data/itinerary.json` from the example, install `requirements-dev.txt`, t
 
 For meaningful frontend, layout or interaction changes, perform actual screenshot-based visual inspection as well as functional checks. Review both desktop (about `1440 × 900`) and phone portrait (about `390 × 844`; also consider `360 × 800` for dense UI), checking hierarchy, spacing, overflow, dialog fit, touch targets and polish. Fix clear in-scope visual defects before handoff; do not treat DOM assertions alone as UX verification.
 
+Actual-device feedback is authoritative when it conflicts with browser emulation or synthetic screenshots. Reproduce and fix the reported real-device behavior; do not dismiss it because an earlier automated or emulated check passed.
+
 ## Non-negotiable data rules
 
 - The JSON document is the product boundary: it must remain human-readable, deterministic, portable and safe for AI-assisted export/edit/import.

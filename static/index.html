@@ -7,7 +7,7 @@
   <title>Trip Planner</title>
   <link rel="manifest" href="/static/manifest.webmanifest">
   <link rel="stylesheet" href="/static/vendor/maplibre-gl/maplibre-gl.css">
-  <link rel="stylesheet" href="/static/styles.css?v=ux-audit-v1">
+  <link rel="stylesheet" href="/static/styles.css?v=schedule-modes-v4">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -21,7 +21,6 @@
       </div>
       <nav class="primary-tabs" aria-label="Main views">
         <button class="tab-button active" data-tab="day">Schedule</button>
-        <button class="tab-button" data-tab="flow">Trip Flow</button>
         <button class="tab-button" data-tab="today">Today</button>
         <button class="tab-button" data-tab="map">Map</button>
         <button class="tab-button" data-tab="budget">Budget</button>
@@ -41,24 +40,29 @@
         <div class="view-toolbar day-toolbar">
           <div class="toolbar-group">
             <button id="day-prev" class="step-button" title="Previous day">←</button>
-            <label class="field-inline">Jump to <input id="day-date" type="date"></label>
+            <label class="field-inline"><span class="jump-to-label">Jump to</span><input id="day-date" type="date" aria-label="Jump to date"></label>
             <button id="day-next" class="step-button" title="Next day">→</button>
             <button id="today-start-button" class="secondary-button">Trip start</button>
           </div>
+          <div class="schedule-mode-switch" role="group" aria-label="Schedule mode">
+            <button type="button" class="schedule-mode-button active" data-schedule-mode="events" aria-pressed="true">Events</button>
+            <button type="button" class="schedule-mode-button" data-schedule-mode="places" aria-pressed="false">Places &amp; travel</button>
+          </div>
           <div class="toolbar-group grow">
-            <label class="field-inline grow">Search <input id="day-search" type="search" placeholder="Activity, location or note"></label>
-            <details id="category-filter-menu" class="filter-menu">
-              <summary class="secondary-button">Filters <span id="category-filter-count">All</span></summary>
-              <div class="filter-popover" role="group" aria-label="Schedule categories">
-                <div id="category-filter-options" class="filter-options"></div>
+            <label class="field-inline grow"><span id="day-search-label">Search</span><input id="day-search" type="search" placeholder="Activity, location or note"></label>
+            <div id="category-filter-control" class="filter-control">
+              <button type="button" id="category-filter-trigger" class="secondary-button" aria-haspopup="dialog" aria-expanded="false">Filters <span id="category-filter-count">All</span></button>
+              <div id="category-filter-popover" class="filter-popover hidden" role="group" aria-label="Schedule filters">
+                <strong class="filter-popover-title">Schedule filters</strong>
+                <div class="filter-options" data-filter-options></div>
                 <div class="filter-actions">
-                  <button type="button" id="category-select-all" class="linkish-button">Select all</button>
-                  <button type="button" id="category-select-none" class="linkish-button">Deselect all</button>
-                  <button type="button" id="category-reset" class="linkish-button">Reset filters</button>
-                  <button type="button" id="category-filter-done" class="secondary-button filter-done">Done</button>
+                  <button type="button" class="linkish-button" data-filter-action="all">Select all</button>
+                  <button type="button" class="linkish-button" data-filter-action="none">Deselect all</button>
+                  <button type="button" class="linkish-button" data-filter-action="reset">Reset filters</button>
+                  <button type="button" class="secondary-button filter-done" data-filter-action="done">Done</button>
                 </div>
               </div>
-            </details>
+            </div>
             <label class="switch-label"><input id="compact-days" type="checkbox"> Compact</label>
           </div>
         </div>
@@ -81,27 +85,9 @@
           <aside id="event-details" class="details-panel">
             <div class="empty-details">
               <div class="empty-icon">↗</div>
-              <h2>Select part of a bar</h2>
-              <p>Click any event segment to highlight every part of that event, including pieces on other days.</p>
+              <h2>Select part of the schedule</h2>
+              <p>Choose an event, place or journey to see its useful trip details.</p>
             </div>
-          </aside>
-        </div>
-      </section>
-
-      <section id="view-flow" class="view-panel" aria-label="Trip flow timeline view">
-        <div class="view-toolbar flow-toolbar">
-          <div><strong>Trip Flow</strong><span class="toolbar-note">Places, countries and travel across the whole trip</span></div>
-          <div class="flow-legend" aria-label="Trip Flow legend">
-            <span class="flow-legend-stay">Location stay</span>
-            <span class="flow-legend-travel">Travel</span>
-          </div>
-        </div>
-        <div class="flow-layout" data-selection-surface="flow">
-          <div class="flow-pane">
-            <div id="flow-timeline" class="flow-timeline"></div>
-          </div>
-          <aside id="flow-details" class="details-panel flow-details">
-            <div class="empty-details"><div class="empty-icon">↔</div><h2>Select a stay or journey</h2><p>Choose a location or travel segment to see the useful trip context.</p></div>
           </aside>
         </div>
       </section>
@@ -318,6 +304,14 @@
     <div class="timeline-detail-heading"><span>Trip details</span><button type="button" id="close-timeline-detail" class="icon-button" aria-label="Close details">×</button></div>
     <div id="timeline-detail-content" class="timeline-detail-content"></div>
   </dialog>
-  <script type="module" src="/static/app.js?v=ux-audit-v1"></script>
+  <dialog id="schedule-filter-dialog" class="schedule-filter-dialog" aria-labelledby="schedule-filter-title">
+    <div class="schedule-filter-heading"><div><h2 id="schedule-filter-title">Schedule filters</h2><p>Choose which event categories appear.</p></div><button type="button" id="close-schedule-filter" class="icon-button" aria-label="Close filters">×</button></div>
+    <div class="schedule-filter-body"><div class="filter-options" data-filter-options></div></div>
+    <div class="schedule-filter-actions">
+      <div><button type="button" class="linkish-button" data-filter-action="all">Select all</button><button type="button" class="linkish-button" data-filter-action="none">Deselect all</button><button type="button" class="linkish-button" data-filter-action="reset">Reset filters</button></div>
+      <button type="button" class="primary-button" data-filter-action="done">Done</button>
+    </div>
+  </dialog>
+  <script type="module" src="/static/app.js?v=schedule-modes-v4"></script>
 </body>
 </html>
