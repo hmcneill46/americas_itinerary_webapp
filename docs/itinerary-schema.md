@@ -42,7 +42,7 @@ Required fields:
 - `category_colours`: object mapping category names to strict six-digit hex colours such as `"#E58C47"`.
 - `map_bounds`: numeric `min_lon`, `max_lon`, `min_lat`, `max_lat`. Longitude is in `[-180, 180]`, latitude in `[-90, 90]`, minima must be less than maxima, and every location must be inside the bounds.
 
-The interactive map currently fits its camera from visit coordinates rather than using `map_bounds`. The validated bounds remain part of schema v7 for portability, compatibility and other consumers; keep them large enough to contain every location.
+The interactive map currently fits its camera from visit coordinates rather than using `map_bounds`. The validated bounds remain part of schema v8 for portability, compatibility and other consumers; keep them large enough to contain every location.
 
 Optional string fields default to `""`: `description`, `time_model_note`, `created_from`, and `default_currency`. A non-empty `default_currency` is a three-letter uppercase code such as `EUR`; it is only a trip-level hint, not a budgeting model.
 
@@ -206,7 +206,7 @@ Booking lifecycle never invents money. `cost_item_id` and the reciprocal `budget
 
 ## Budget and money
 
-`budget` is required in schema v7. It is the only canonical place for trip financial data; do not add ad-hoc prices to events or bookings.
+`budget` is required in schema v8. It is the only canonical place for trip financial data; do not add ad-hoc prices to events or bookings.
 
 ```json
 "budget": {
@@ -282,14 +282,16 @@ Payments belong inside their cost item and are all in that item's native currenc
 
 ## Versioning and migration
 
-The application currently accepts versions 4, 5, 6, and 7. Validation and import first make a deep copy, apply every migration in sequence, then run normal v7 validation. Migration never mutates the supplied object.
+The application currently accepts versions 4 through 8. Validation and import first make a deep copy, apply every migration in sequence, then run normal v8 validation. Migration never mutates the supplied object.
 
 For v4, each positional booking row becomes a v5 booking object with a deterministic ID. The old positions map to `date`, `type`, `title`, `time`, `duration`, `booking_deadline`, status input, `details`, `urgency`, `notes`, and `reference`. The complete original row is also retained under `legacy.positional_values`, so ambiguous or extra values are not lost. The subsequent v5→v6 migration adds a deterministic empty budget: default categories, base currency from `metadata.default_currency` (or `USD` when blank), and no inferred cost items. It never guesses prices from bookings.
 
 The v6→v7 migration maps the former lifecycle (`planned`, `booked`, `cancelled`) to `ready_to_book`, `booked`, or `cancelled`, adds neutral unknown timing advice, carries forward the old booking deadline as a hard deadline, and fills the reciprocal cost link when it is already unambiguous. It does not claim research, risk, or timing advice that was not present.
 
-`GET /api/itinerary` may return an old saved file as migrated v7 data plus a `migrations` list. The original file is not rewritten merely by loading. `POST /api/validate` returns the migrated canonical document in `itinerary`; browser upload places that document only in the draft. A revision-protected save persists v7.
+The v7→v8 migration adds the neutral `planned` outcome and blank actual-time, outcome-note, and replacement fields to every event. It does not infer that past events happened or invent actual times.
 
-Files newer than the supported version, older than v4, or unable to migrate safely are rejected. Applying migration to v5 again makes no changes.
+`GET /api/itinerary` may return an old saved file as migrated v8 data plus a `migrations` list. The original file is not rewritten merely by loading. `POST /api/validate` returns the migrated canonical document in `itinerary`; browser upload places that document only in the draft. A revision-protected save persists v8.
+
+Files newer than the supported version, older than v4, or unable to migrate safely are rejected. Applying the migration pipeline to v8 again makes no changes.
 
 See `data/itinerary.example.json` for a complete public-safe canonical document.

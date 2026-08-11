@@ -35,3 +35,10 @@ tools
 *.tmp
 *.swp
 .DS_Store
+playwright-report
+test-results
+browser-artifacts
+visual-qa
+screenshots
+*.har
+trace.zip

@@ -40,9 +40,9 @@ Changing providers should require configuration, not edits to trip logic. A cust
 
 ## Trip overlays
 
-Primary visits use numbered DOM markers. Separate visits to the same coordinates receive stable screen-space offsets and small repeat badges, so returning to a place does not silently collapse into one point. Locations referenced by events but not visits use smaller secondary dots.
+Primary visits use numbered DOM markers anchored exactly to itinerary longitude/latitude. Repeated visits at the same coordinates share one grouped marker whose badge and popup expose each visit in trip order; visits are never moved away from the real place merely to avoid overlap. Locations referenced by events but not visits use smaller secondary dots.
 
-Travel/Hike events with valid `from_location_id` and `to_location_id` references become route segments. When a consecutive visit has no complete travel event, the visit's arrival information supplies a fallback segment. Every current segment has `geometryKind: "schematic"` in the derived browser model and is drawn as a dashed endpoint connection. Popups and details repeat that it is approximate. Real route geometry can later replace the geometry resolver without coupling it to the basemap provider; it is not yet a persisted schema-v5 field.
+Travel/Hike events with valid `from_location_id` and `to_location_id` references become route segments. When a consecutive visit has no complete travel event, the visit's arrival information supplies a fallback segment. Every current segment has `geometryKind: "schematic"` in the derived browser model and is drawn as a dashed endpoint connection. Popups and details repeat that it is approximate. Real route geometry can later replace the geometry resolver without coupling it to the basemap provider; it is not yet a persisted schema-v8 field.
 
 Popup content is constructed with DOM nodes and `textContent`, not raw itinerary HTML.
 

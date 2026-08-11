@@ -241,3 +241,12 @@ data/backups/*
 !data/backups/.gitkeep
 exports/*
 !exports/.gitkeep
+
+# Browser and visual-QA output
+playwright-report/
+test-results/
+browser-artifacts/
+visual-qa/
+screenshots/
+*.har
+trace.zip

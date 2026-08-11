@@ -4,7 +4,7 @@ Trip Planner is an installable PWA on deployed same-origin hosts. After one succ
 
 ## What works offline
 
-If the home server or Tailscale is unreachable, the shell can boot from cache and shows the most recently accepted snapshot in read-only mode. Today, Day bars, Bookings, Budget, AI handoff reading/export, and trip map overlays continue to derive from that data. The banner states that it is an offline copy and when it was refreshed.
+If the home server or Tailscale is unreachable, the shell can boot from cache and shows the most recently accepted snapshot in read-only mode. Today, Schedule, Trip Flow, Bookings, Budget, AI handoff reading/export, and trip map overlays continue to derive from that data. The banner states that it is an offline copy and when it was refreshed.
 
 The snapshot is written only after `GET /api/itinerary` succeeds and the response has been accepted into normal application state, or after a successful revision-protected server save. Import previews and unsaved browser drafts are never stored as the offline trip.
 

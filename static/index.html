@@ -7,7 +7,7 @@
   <title>Trip Planner</title>
   <link rel="manifest" href="/static/manifest.webmanifest">
   <link rel="stylesheet" href="/static/vendor/maplibre-gl/maplibre-gl.css">
-  <link rel="stylesheet" href="/static/styles.css?v=offline-v5">
+  <link rel="stylesheet" href="/static/styles.css?v=ux-audit-v1">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -20,7 +20,8 @@
         </div>
       </div>
       <nav class="primary-tabs" aria-label="Main views">
-        <button class="tab-button active" data-tab="day">Day bars</button>
+        <button class="tab-button active" data-tab="day">Schedule</button>
+        <button class="tab-button" data-tab="flow">Trip Flow</button>
         <button class="tab-button" data-tab="today">Today</button>
         <button class="tab-button" data-tab="map">Map</button>
         <button class="tab-button" data-tab="budget">Budget</button>
@@ -46,14 +47,23 @@
           </div>
           <div class="toolbar-group grow">
             <label class="field-inline grow">Search <input id="day-search" type="search" placeholder="Activity, location or note"></label>
-            <select id="category-filter" class="compact-select" aria-label="Filter category">
-              <option value="">All categories</option>
-            </select>
+            <details id="category-filter-menu" class="filter-menu">
+              <summary class="secondary-button">Filters <span id="category-filter-count">All</span></summary>
+              <div class="filter-popover" role="group" aria-label="Schedule categories">
+                <div id="category-filter-options" class="filter-options"></div>
+                <div class="filter-actions">
+                  <button type="button" id="category-select-all" class="linkish-button">Select all</button>
+                  <button type="button" id="category-select-none" class="linkish-button">Deselect all</button>
+                  <button type="button" id="category-reset" class="linkish-button">Reset filters</button>
+                  <button type="button" id="category-filter-done" class="secondary-button filter-done">Done</button>
+                </div>
+              </div>
+            </details>
             <label class="switch-label"><input id="compact-days" type="checkbox"> Compact</label>
           </div>
         </div>
 
-        <div class="day-layout">
+        <div class="day-layout" data-selection-surface="schedule">
           <div class="timeline-pane">
             <div class="timeline-scale sticky-scale">
               <div class="scale-meta">Date and base</div>
@@ -74,6 +84,24 @@
               <h2>Select part of a bar</h2>
               <p>Click any event segment to highlight every part of that event, including pieces on other days.</p>
             </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="view-flow" class="view-panel" aria-label="Trip flow timeline view">
+        <div class="view-toolbar flow-toolbar">
+          <div><strong>Trip Flow</strong><span class="toolbar-note">Places, countries and travel across the whole trip</span></div>
+          <div class="flow-legend" aria-label="Trip Flow legend">
+            <span class="flow-legend-stay">Location stay</span>
+            <span class="flow-legend-travel">Travel</span>
+          </div>
+        </div>
+        <div class="flow-layout" data-selection-surface="flow">
+          <div class="flow-pane">
+            <div id="flow-timeline" class="flow-timeline"></div>
+          </div>
+          <aside id="flow-details" class="details-panel flow-details">
+            <div class="empty-details"><div class="empty-icon">↔</div><h2>Select a stay or journey</h2><p>Choose a location or travel segment to see the useful trip context.</p></div>
           </aside>
         </div>
       </section>
@@ -286,6 +314,10 @@
     <form id="booking-form" class="budget-form" autocomplete="off"><div class="dialog-heading"><div><h2 id="booking-dialog-title">Add booking</h2><p>Keep booking lifecycle separate from research advice and money.</p></div><button type="button" id="close-booking-dialog" class="icon-button" aria-label="Close">×</button></div><div class="budget-form-body"><input id="booking-id" type="hidden"><fieldset class="budget-fieldset span-2"><legend>Basic</legend><div class="form-grid compact-grid"><label class="span-2">What needs booking?<input id="booking-title" required maxlength="160" placeholder="e.g. Trek campsite"></label><label>Booking type<input id="booking-type" required maxlength="80" placeholder="Accommodation, tour…"></label><label>Lifecycle<select id="booking-lifecycle"><option value="not_researched">Not researched</option><option value="researching">Researching</option><option value="ready_to_book">Ready to book</option><option value="booked">Booked</option><option value="cancelled">Cancelled</option><option value="not_required">Not required</option></select></label><label>Applies on<input id="booking-date" type="date"></label><label>Visit<select id="booking-visit"></select></label><label>Event<select id="booking-event"></select></label><label>Location<select id="booking-location"></select></label></div></fieldset><fieldset class="budget-fieldset span-2"><legend>When to book</legend><div class="form-grid compact-grid"><label>Strategy<select id="booking-strategy"><option value="unknown">Not researched yet</option><option value="book_now">Book now</option><option value="before_departure">Before departure</option><option value="lead_time">Relative to itinerary date</option><option value="on_arrival">On arrival</option><option value="flexible">Intentionally flexible</option></select></label><label>Recommended explicit date<input id="booking-recommended-date" type="date"></label><label>Days before anchor<input id="booking-lead-days" type="number" min="0" max="3650" placeholder="e.g. 30"></label><label>Anchor<select id="booking-anchor"><option value="event_start">Event start</option><option value="visit_start">Visit start</option><option value="trip_start">Trip start</option></select></label><label>Hard deadline<input id="booking-hard-deadline" type="date"></label><label>Sell-out risk<select id="booking-sellout-risk"><option value="unknown">Unknown</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label>Price-rise risk<select id="booking-price-risk"><option value="unknown">Unknown</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label>Value of flexibility<select id="booking-flexibility"><option value="unknown">Unknown</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label class="span-2">Why this timing?<textarea id="booking-rationale" rows="3" placeholder="Limited capacity and fixed trek dates."></textarea></label></div></fieldset><fieldset class="budget-fieldset span-2"><legend>Research and provider</legend><div class="form-grid compact-grid"><label>Provider/operator<input id="booking-provider"></label><label>Booking URL<input id="booking-url" type="url" placeholder="https://…"></label><label>Confirmation/reference<input id="booking-reference"></label><label>Advice confidence<select id="booking-confidence"><option value="unknown">Unknown</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label>Last researched<input id="booking-researched-date" type="date"></label><label class="span-2">Research source URLs (one per line)<textarea id="booking-sources" rows="3" placeholder="https://example.com/advice"></textarea></label></div></fieldset><fieldset id="booking-finance-fieldset" class="budget-fieldset span-2"><legend>Confirm price and payment</legend><div class="form-grid compact-grid"><label class="span-2">Linked cost item<select id="booking-cost"></select></label><label>Known committed booked price<input id="booking-committed" inputmode="decimal" placeholder="Does not change expected estimate"></label><label>Deposit paid now (optional)<input id="booking-deposit" inputmode="decimal" placeholder="Records a payment"></label><label>Payment date<input id="booking-payment-date" type="date"></label></div><p class="form-help">Confirming a booking never records payment unless a deposit is entered. Cancellation keeps cost/payment history intact.</p></fieldset><label class="span-2">Notes<textarea id="booking-notes" rows="3"></textarea></label></div><div class="dialog-actions"><span class="dialog-spacer"></span><button type="button" id="cancel-booking-button" class="secondary-button">Cancel</button><button type="submit" class="primary-button">Apply to draft</button></div></form>
   </dialog>
   <dialog id="import-preview-dialog" class="budget-dialog import-preview-dialog"><div class="dialog-heading"><div><h2>Review imported itinerary</h2><p>Nothing is saved until you apply this to the draft, then use Save.</p></div><button type="button" id="close-import-preview" class="icon-button" aria-label="Close">×</button></div><div id="import-preview-content" class="import-preview-content"></div><div class="dialog-actions"><button type="button" id="cancel-import-preview" class="secondary-button">Keep current draft</button><span class="dialog-spacer"></span><button type="button" id="apply-import-button" class="primary-button">Apply changes to draft</button></div></dialog>
-  <script type="module" src="/static/app.js?v=offline-v5"></script>
+  <dialog id="timeline-detail-dialog" class="timeline-detail-dialog" aria-labelledby="timeline-detail-title">
+    <div class="timeline-detail-heading"><span>Trip details</span><button type="button" id="close-timeline-detail" class="icon-button" aria-label="Close details">×</button></div>
+    <div id="timeline-detail-content" class="timeline-detail-content"></div>
+  </dialog>
+  <script type="module" src="/static/app.js?v=ux-audit-v1"></script>
 </body>
 </html>

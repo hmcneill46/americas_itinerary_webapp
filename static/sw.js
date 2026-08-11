@@ -1,9 +1,10 @@
-const CACHE_NAME = 'trip-planner-shell-v5';
+const CACHE_NAME = 'trip-planner-shell-v6';
 const APP_SHELL = [
-  '/', '/static/index.html', '/static/styles.css?v=offline-v5',
-  '/static/app.js?v=offline-v5', '/static/offline-store.js?v=offline-v5',
+  '/', '/static/index.html', '/static/styles.css?v=ux-audit-v1',
+  '/static/app.js?v=ux-audit-v1', '/static/offline-store.js?v=offline-v5',
   '/static/budget.js?v=budget-v5', '/static/booking.js?v=booking-v1',
   '/static/import-diff.js?v=import-v1', '/static/today.js?v=today-v1',
+  '/static/timeline.js?v=timeline-v1',
   '/static/map-config.js?v=map-marker-anchor-1', '/static/map-data.js?v=map-marker-anchor-1',
   '/static/map-view.js?v=map-marker-anchor-1', '/static/vendor/maplibre-gl/maplibre-gl.css',
   '/static/vendor/maplibre-gl/maplibre-gl.mjs?v=6.3.0', '/static/vendor/maplibre-gl/maplibre-gl-shared.mjs',
